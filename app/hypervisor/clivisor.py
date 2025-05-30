@@ -51,7 +51,7 @@ class CLIVisor:
         try:
             if PLATFORM == "macOS":
                 self.launch_cli_mac()
-            elif PLATFORM == "ubuntu":
+            elif PLATFORM == "Linux":
                 self.launch_cli_ubuntu(
                     venv_path=os.path.join(self.base_dir, ".venv"),
                     cli_py_path=cli_path,
@@ -229,7 +229,7 @@ def install_moondream_cli(
     logger.debug(f"Installed wrapper → {wrapper}")
 
     # For VS code and some containers, PATH gets over written. Create symlink so the wrapper can still be accessed.
-    if PLATFORM == "ubuntu":
+    if PLATFORM == "Linux":
         try:
             usr_local = Path("/usr/local/bin") / cli_name
             if not usr_local.exists():

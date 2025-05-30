@@ -9,3 +9,4 @@ starlette==0.41.0
 python-multipart
 uvicorn==0.34.0
 Numpy==1.26.1
+torchao==0.11.0

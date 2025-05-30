@@ -53,14 +53,20 @@ def is_ubuntu() -> bool:
         import distro
     except ModuleNotFoundError:
         return False
-    return distro.id() == "ubuntu"
+    return distro.id() == "Linux"
+
+
+def is_linux() -> bool:
+    return platform.system() == "Linux"
 
 
 def check_platform() -> str:
     if is_macos():
         return "macOS"
-    elif is_ubuntu():
-        return "ubuntu"
+    elif is_linux():
+        return "Linux"
+    else:
+        return "other"
 
 
 def get_app_dir(platform: str = None) -> str:
@@ -70,7 +76,7 @@ def get_app_dir(platform: str = None) -> str:
 
     if platform == "macOS":
         app_dir = Path.home() / "Library"
-    elif platform == "ubuntu":
+    elif platform == "Linux":
         app_dir = Path(
             os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
         )

@@ -21,11 +21,11 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("pyvips").setLevel(logging.ERROR)
 
-VERSION = "v0.0.2"
+VERSION = "v0.0.3"
 
 
 async def lifespan(app: FastAPI):
-    model_name = "vikhyatk/moondream2"
+    model_name = "moondream/moondream-2b-2025-04-14-4bit"
     revision = getattr(app.state, "revision", None)
     app.state.model_service = ModelService(model_name, revision)
     logger.info("Model initialized successfully.")

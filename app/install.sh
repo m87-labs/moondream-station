@@ -12,6 +12,13 @@ if [ "$OS" = "Linux" ]; then
     DOWNLOAD_URL="$DOWNLOAD_URL_UBUNTU"
     DOWNLOAD_PATH="./md_station_ubuntu.tar.gz"
     
+    # Remove existing app data directory if it exists
+    MOONDREAM_DATA_DIR="$HOME/.local/share/MoondreamStation"
+    if [ -d "$MOONDREAM_DATA_DIR" ]; then
+        echo "Removing existing app data directory..."
+        rm -rf "$MOONDREAM_DATA_DIR"
+    fi
+    
     echo "Downloading Moondream Station..."
     curl -# -L "$DOWNLOAD_URL" -o "$DOWNLOAD_PATH"
     
@@ -44,6 +51,13 @@ else
     DOWNLOAD_PATH="$DOWNLOAD_DIR/moondream_station.tar.gz"
     APPLICATIONS_DIR="/Applications"
     FINAL_DOWNLOAD_DIR="$DOWNLOAD_DIR/Moondream Station"
+    
+    # Remove existing app data directory if it exists
+    MOONDREAM_DATA_DIR="$HOME/Library/MoondreamStation"
+    if [ -d "$MOONDREAM_DATA_DIR" ]; then
+        echo "Removing existing app data directory..."
+        rm -rf "$MOONDREAM_DATA_DIR"
+    fi
     
     echo "Downloading Moondream Station..."
     curl -# -L "$DOWNLOAD_URL" -o "$DOWNLOAD_PATH"

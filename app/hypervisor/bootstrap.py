@@ -20,7 +20,7 @@ from misc import download_file, check_platform, get_app_dir
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
     MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-MacOSX-arm64.sh"
-elif PLATFORM == "ubuntu":
+elif PLATFORM == "Linux":
     MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-Linux-x86_64.sh"
 else:
     sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
@@ -651,7 +651,7 @@ def update_bootstrap(app_dir: str, logger: logging.Logger) -> bool:
                 launch_update_bash_mac(
                     update_script_path, bootstrap_exe, current_app_bundle
                 )
-            elif PLATFORM == "ubuntu":
+            elif PLATFORM == "Linux":
                 launch_update_bash_ubuntu(
                     update_script_path, bootstrap_exe, current_app_bundle, logger
                 )
@@ -778,7 +778,7 @@ def main(verbose: bool = False):
     update_config_bootstrap_version(app_dir, logger)
 
     if not is_setup(app_dir):
-        if PLATFORM == "ubuntu":
+        if PLATFORM == "Linux":
             subprocess.run(
                 ["sudo", "apt", "update"],
                 check=True,  # raise if the command exits non-zero

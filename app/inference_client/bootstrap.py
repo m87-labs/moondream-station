@@ -17,7 +17,7 @@ PYTHON_VERSION = "3.10"
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
     MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-MacOSX-arm64.sh"
-elif PLATFORM == "ubuntu":
+elif PLATFORM == "Linux":
     MINIFORGE_MAC_URL = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
 else:
     sys.exit(f"Only macOS and Ubuntu are supported. Detected platform is {PLATFORM}")

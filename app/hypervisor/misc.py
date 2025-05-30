@@ -1,6 +1,7 @@
 import platform
 import urllib.request
 import os
+import sys
 from pathlib import Path
 
 
@@ -46,21 +47,17 @@ def is_macos():
     return platform.system().lower().startswith("darwin")
 
 
-def is_ubuntu() -> bool:
-    if platform.system().lower() != "linux":
-        return False
-    try:
-        import distro
-    except ModuleNotFoundError:
-        return False
-    return distro.id() == "ubuntu"
+def is_linux() -> bool:
+    return platform.system() == "Linux"
 
 
 def check_platform() -> str:
     if is_macos():
         return "macOS"
-    elif is_ubuntu():
-        return "ubuntu"
+    elif is_linux():
+        return "Linux"
+    else:
+        return "other"
 
 
 def get_app_dir(platform: str = None) -> str:
@@ -69,7 +66,7 @@ def get_app_dir(platform: str = None) -> str:
     """Get the application support directory for Moondream Station."""
     if platform == "macOS":
         app_dir = Path.home() / "Library"
-    elif platform == "ubuntu":
+    elif platform == "Linux":
         app_dir = Path(
             os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
         )

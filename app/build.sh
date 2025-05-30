@@ -152,7 +152,7 @@ prepare_dev() {
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2; exit 1
     fi
 
-    mkdir -p "$DEV_DIR/inference/v0.0.1"
+    mkdir -p "$DEV_DIR/inference/v0.0.3"
 
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
@@ -169,7 +169,7 @@ prepare_dev() {
     cp -r "../output/moondream-cli/moondream_cli" "$DEV_DIR/"
 
     # copy inference build
-    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
+    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.3/"
 
     echo "✔ dev sandbox ready → $DEV_DIR"
 }

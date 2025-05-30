@@ -22,18 +22,19 @@ def check_platform() -> str:
     if system == "darwin":
         return "macOS"
     elif system == "linux":
-        # Check if it's Ubuntu or a derivative
-        try:
-            import os
+        return "Linux"
+        # # Check if it's Ubuntu or a derivative
+        # try:
+        #     import os
 
-            if os.path.exists("/etc/lsb-release"):
-                with open("/etc/lsb-release", "r") as f:
-                    if "ubuntu" in f.read().lower():
-                        return "ubuntu"
-            # Fallback for other detection methods
-            return "ubuntu"
-        except:
-            return "ubuntu"  # Assume Ubuntu for Linux
+        #     if os.path.exists("/etc/lsb-release"):
+        #         with open("/etc/lsb-release", "r") as f:
+        #             if "ubuntu" in f.read().lower():
+        #                 return "ubuntu"
+        #     # Fallback for other detection methods
+        #     return "ubuntu"
+        # except:
+        #     return "ubuntu"  # Assume Ubuntu for Linux
     else:
         return "unsupported"
 
@@ -389,7 +390,7 @@ class AdminCommands:
 
             # Exit after CLI update is complete on Ubuntu, as the CLI process needs to end
             # so that the new CLI can be used on next invocation
-            if check_platform() == "ubuntu":
+            if check_platform() == "Linux":
                 print(
                     "⚠️ CLI update complete. Please restart the CLI to use the updated version."
                 )
@@ -397,7 +398,7 @@ class AdminCommands:
 
         except requests.exceptions.ConnectionError:
             print("Update initiated. CLI is updating...")
-            if check_platform() == "ubuntu":
+            if check_platform() == "Linux":
                 sys.exit(0)
         except Exception as e:
             print(f"Error initiating CLI update: {e}")
