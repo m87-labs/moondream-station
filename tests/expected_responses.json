@@ -1,0 +1,70 @@
+{  
+  "caption_length_ranges": {
+    "short": {
+      "min_words": 5,
+      "max_words": 35,
+      "min_chars": 30,
+      "max_chars": 200
+    },
+    "normal": {
+      "min_words": 20,
+      "max_words": 80,
+      "min_chars": 100,
+      "max_chars": 500
+    },
+    "long": {
+      "min_words": 60,
+      "max_words": null,
+      "min_chars": 300,
+      "max_chars": null
+    }
+  },
+  "Moondream2-INT4": {
+    "caption_short": {
+      "keywords": ["white", "circle", "black", "smiley", "face", "eyes", "mouth", "background"]
+    },
+    "caption_normal": {
+      "keywords": ["white", "circle", "cartoon-like", "face", "black", "eyes", "mouth", "smiling", "background"]
+    },
+    "caption_long": {
+      "keywords": ["simple", "stylized", "face", "round", "white", "glossy", "appearance", "circle", "minimalist", "small", "closed", "eyes", "black", "ovals", "curved", "line", "smiling", "mouth", "contentment", "happiness", "cheerful", "friendly", "expression", "gentle"]
+    },
+    "query": {
+      "keywords": ["smiling", "face", "white", "circle", "black", "eyes", "background", "contrast"]
+    },
+    "detect": "{'x_min': 0.08724340796470642, 'y_min': 0.09001743793487549, 'x_max': 0.9088503420352936, 'y_max': 0.9060763120651245}",
+    "point": "{'x': 0.49609375, 'y': 0.35546875}"
+  },
+  "Moondream2-2025-04-14": {
+    "caption_short": {
+      "keywords": ["white", "circle", "smiley", "centered", "face", "black", "eyes", "mouth"]
+    },
+    "caption_normal": {
+      "keywords": ["simple", "cartoon-like", "face", "white", "circle", "curved", "mouth", "friendly", "eyes", "smile", "background"]
+    },
+    "caption_long": {
+      "keywords": ["simple", "round", "white", "circle", "gradient", "soft", "dimensional", "eyes", "smile", "minimalistic", "childlike", "happiness", "friendliness"]
+    },
+    "query": {
+      "keywords": ["simple", "cute", "face", "smiling", "white", "round", "friendly", "approachable"]
+    },
+    "detect": "{'x_min': 0.0, 'y_min': 0.0, 'x_max': 1.0, 'y_max': 1.0}",
+    "point": "{'x': 0.5029296875, 'y': 0.3798828125}"
+  },
+  "Moondream2-2025-3-27": {
+    "caption_short": {
+      "keywords": ["white", "circle", "simple", "friendly", "face", "black", "eyes", "curved", "mouth", "happiness"]
+    },
+    "caption_normal": {
+      "keywords": ["simple", "round", "white", "emoticon", "blue", "outline", "cheerful", "smiling", "face", "eyes", "mouth", "friendly", "background"]
+    },
+    "caption_long": {
+      "keywords": ["simple", "round", "white", "circle", "gradient", "shading", "soft", "smiley", "face", "eyes", "smile", "minimalistic", "cute", "cheerful"]
+    },
+    "query": {
+      "keywords": ["simple", "cartoon-like", "face", "smiling", "white", "round", "cheerful"]
+    },
+    "detect": "No face objects detected",
+    "point": "{'x': 0.509765625, 'y': 0.365234375}"
+  }
+}
