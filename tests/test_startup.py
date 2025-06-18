@@ -1,9 +1,8 @@
 import pexpect
 import logging
-import shutil
 import os
 import argparse
-from utils import is_port_occupied, validate_files, clean_files, load_expected_responses, clean_response_output
+from utils import is_port_occupied, validate_files, clean_files, load_expected_responses, clean_response_output, validate_model_list
 
 GLOBAL_TIMEOUT = 300
 
@@ -128,6 +127,7 @@ def test_capability(child, command, expected_response, timeout=60):
     logging.debug(f"Got: {cleaned_output}")
     
     return success, cleaned_output
+
 def test_model_capabilities(child, model_name):
     image_url = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
     
@@ -195,6 +195,8 @@ def test_all_models(child):
     model_list_output = child.before.decode()
     logging.debug("Model list output:")
     logging.debug(model_list_output)
+    
+    validate_model_list(model_list_output)
     
     models = parse_model_list_output(model_list_output)
     logging.debug(f"Found {len(models)} models: {models}")
