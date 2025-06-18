@@ -140,7 +140,7 @@ class MoondreamREPL:
                     if data.get("ood", False):
                         has_updates = True
                         update_messages.append(
-                            f"{component.capitalize()} update available: {data.get('version', '') or data.get('revision', 'unknown')}"
+                            f"{component.capitalize()} update available: {data.get('model_name', 'unknown')}"
                         )
 
                 if has_updates:

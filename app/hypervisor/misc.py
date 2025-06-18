@@ -14,22 +14,25 @@ def parse_version(version: str) -> tuple[int, ...]:
     return tuple(int(part) for part in version.split("."))
 
 
-def parse_revision(revision: str) -> tuple[int, ...]:
-    """Extract integer components from a revision string.
-
-    This helper gracefully handles revisions that contain alphabetic
-    prefixes/suffixes such as ``2025-04-14-4bit`` or ``4bit-2025-04-14``.
+def parse_date(date: str) -> tuple[int, ...]:
+    """Extract integer components from a date string.
+    
+    Converts date strings like "2025-05-21" into comparable tuples.
     Any numeric sequences found in the string are returned as a tuple of
-    integers.  If no digits are found, ``(0,)`` is returned so that the
+    integers. If no digits are found, ``(0,)`` is returned so that the
     value can still participate in comparisons.
+    
+    Examples:
+        "2025-05-21" → (2025, 5, 21)
+        "2025-4-14" → (2025, 4, 14) 
+        "2025-03-27" → (2025, 3, 27)
+        "invalid" → (0,)
     """
     import re
-
-    numeric_parts = re.findall(r"\d+", revision)
+    numeric_parts = re.findall(r"\d+", date)
     if not numeric_parts:
         return (0,)
     return tuple(int(part) for part in numeric_parts)
-
 
 def download_file(url, out_path, logger):
     logger.info(f"Downloading {url} -> {out_path}")
