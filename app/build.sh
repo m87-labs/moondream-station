@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
+# Usage: ./build.sh <type> <platform> <version>
 
-# Parse args
+# Parse args first
 CLEAN=false
 ARGS=()
 for arg in "$@"; do
@@ -12,6 +13,38 @@ done
 
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
+VERSION=${ARGS[2]:-v0.0.1}  # Default to v0.0.1
+
+echo "Building with version: $VERSION"
+
+update_version_strings() {
+    local version=$1
+    echo "Updating version strings to $version..."
+    
+    # Update hypervisor version
+    sed -i.bak "s/HYPERVISOR_VERSION = \".*\"/HYPERVISOR_VERSION = \"$version\"/" ../app/hypervisor/hypervisor.py
+    
+    # Update inference version  
+    sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/inference_client/main.py
+    
+    # Update CLI version (check if __init__.py exists, if not try other locations)
+    if [ -f "../app/moondream_cli/__init__.py" ]; then
+        sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/moondream_cli/__init__.py
+    elif [ -f "../app/moondream_cli/cli.py" ]; then
+        sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/moondream_cli/cli.py
+    else
+        echo "Warning: Could not find CLI version file"
+    fi
+}
+
+restore_version_strings() {
+    echo "Restoring original version strings..."
+    # Restore from .bak files
+    find ../app -name "*.bak" -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
+}
+
+# Set up cleanup trap
+trap restore_version_strings EXIT
 
 if $CLEAN; then
     echo "Cleaning output and dev directories..."
@@ -25,8 +58,8 @@ fi
 
 set -euo pipefail
 
-TYPE=${1:-}            # inference | hypervisor | cli | dev
-PLATFORM=${2:-ubuntu}  # mac | ubuntu  (default ubuntu)
+# Update version strings before building
+update_version_strings "$VERSION"
 
 ##############################################################################
 # builders
@@ -78,8 +111,12 @@ PY
         cp "$SRC_DIR/$f" "$DIST_DIR"
     done
     echo "!!!!!! my current working dir is $PWD"
-    tar -czf "../output/inference_bootstrap.tar.gz" -C "../output" "inference_bootstrap"
-    echo "✔ inference → $DIST_DIR"
+    
+    # Create versioned tarball
+    local VERSION_SUFFIX="_${VERSION//./}"  # v0.0.1 -> _v001
+    tar -czf "../output/inference_bootstrap${VERSION_SUFFIX}.tar.gz" -C "../output" "inference_bootstrap"
+    
+    echo "✔ inference → $DIST_DIR (${VERSION})"
 }
 
 build_hypervisor() {
@@ -142,9 +179,13 @@ PY
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
-    tar -czf "../output/hypervisor.tar.gz" -C "$SUP_DIR" .
-    tar -czf "../output/moondream_station_ubuntu.tar.gz" -C "$DIST_DIR" moondream_station
-    echo "✔ hypervisor → $DIST_DIR"
+    
+    # Create versioned tarballs
+    local VERSION_SUFFIX="_${VERSION//./}"  # v0.0.1 -> _v001
+    tar -czf "../output/hypervisor${VERSION_SUFFIX}.tar.gz" -C "$SUP_DIR" .
+    tar -czf "../output/moondream_station_ubuntu${VERSION_SUFFIX}.tar.gz" -C "$DIST_DIR" moondream_station
+    
+    echo "✔ hypervisor → $DIST_DIR (${VERSION})"
 }
 
 build_cli() {
@@ -155,8 +196,12 @@ build_cli() {
     echo "Building 'cli'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
     cp -r "$SRC_DIR" "$DIST_DIR/"
-    tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
-    echo "✔ cli → $DIST_DIR"
+    
+    # Create versioned tarball
+    local VERSION_SUFFIX="_${VERSION//./}"  # v0.0.1 -> _v001
+    tar -czf "../output/moondream-cli${VERSION_SUFFIX}.tar.gz" -C "$DIST_DIR" moondream_cli
+    
+    echo "✔ cli → $DIST_DIR (${VERSION})"
 }
 
 ##############################################################################
@@ -194,8 +239,7 @@ prepare_dev() {
 
     # copy inference build
     cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
-
-    echo "✔ dev sandbox ready → $DEV_DIR"
+    echo "✔ dev sandbox ready → $DEV_DIR (${VERSION})"
 }
 
 ##############################################################################
@@ -205,6 +249,7 @@ run_station() {
     cd ..
     ./output/moondream_station/moondream_station
 }
+
 ##############################################################################
 # dispatch
 ##############################################################################
@@ -215,7 +260,7 @@ case "$TYPE" in
     dev)         prepare_dev       ;;
     run)         run_station       ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] [version] | $0 run" >&2
         exit 1
         ;;
 esac
