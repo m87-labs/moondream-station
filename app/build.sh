@@ -21,8 +21,13 @@ update_version_strings() {
     local version=$1
     echo "Updating version strings to $version..."
     
-    # Update hypervisor version
-    sed -i.bak "s/HYPERVISOR_VERSION = \".*\"/HYPERVISOR_VERSION = \"$version\"/" ../app/hypervisor/hypervisor.py
+    # Update bootstrap version (this is the main executable)
+    sed -i.bak "s/BOOTSTRAP_VERSION = \".*\"/BOOTSTRAP_VERSION = \"$version\"/" ../app/hypervisor/bootstrap.py
+    
+    # Update hypervisor version (if it exists)
+    if grep -q "HYPERVISOR_VERSION" ../app/hypervisor/hypervisor.py; then
+        sed -i.bak "s/HYPERVISOR_VERSION = \".*\"/HYPERVISOR_VERSION = \"$version\"/" ../app/hypervisor/hypervisor.py
+    fi
     
     # Update inference version  
     sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/inference_client/main.py
@@ -65,13 +70,11 @@ update_version_strings "$VERSION"
 # builders
 ##############################################################################
 build_inference() {
-    local PYI_ARGS="--onefile"
     local NAME="inference_bootstrap"
     local DIST_DIR="../output/inference_bootstrap"
     local BOOTSTRAP="../app/inference_client/bootstrap.py"
     local SRC_DIR="../app/inference_client"
     local FILES=(main.py model_service.py requirements.txt)
-
     local LIBPYTHON
         LIBPYTHON=$(
 python - <<'PY'
@@ -90,14 +93,12 @@ else:
     sys.exit(1)
 PY
 ) || exit 1
-
-        # Build a single-file executable and drop libpython next to the bootstrap
-        PYI_ARGS="--onefile" 
-        #--add-binary ${LIBPYTHON}"
-
+        
+        # Build with libpython bundled
+        local PYI_ARGS="--onefile --add-binary ${LIBPYTHON}"
+        
     echo "Building 'inference'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
-
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
@@ -106,7 +107,6 @@ PY
         --clean \
         --distpath "$DIST_DIR" \
         "$BOOTSTRAP"
-
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$DIST_DIR"
     done
@@ -121,7 +121,6 @@ PY
 
 build_hypervisor() {
     local PYI_ARGS
-
     if [[ "$PLATFORM" = "mac" ]]; then
         # macOS always embeds Python.framework for us
         PYI_ARGS="--windowed"
@@ -145,7 +144,6 @@ else:
     sys.exit(1)
 PY
 ) || exit 1
-
         # Build a single-file executable and drop libpython next to the bootstrap
         PYI_ARGS="--onefile"
         # --add-binary ${LIBPYTHON}"
@@ -153,7 +151,6 @@ PY
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2
         exit 1
     fi
-
     local NAME="moondream_station"
     local DIST_DIR="../output/moondream_station"
     local SUP_DIR="../output/moondream-station-files"
@@ -164,10 +161,8 @@ PY
         manifest.py config.py misc.py update_bootstrap.sh clivisor.py
         display_utils.py
     )
-
     echo "Building 'hypervisor' for $PLATFORM..."
     rm -rf "$DIST_DIR" "$SUP_DIR"; mkdir -p "$DIST_DIR" "$SUP_DIR"
-
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
@@ -175,7 +170,6 @@ PY
         --clean \
         --distpath "$DIST_DIR" \
         "$BOOTSTRAP"
-
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
@@ -192,7 +186,6 @@ build_cli() {
     local NAME="moondream-cli"
     local DIST_DIR="../output/moondream-cli"
     local SRC_DIR="../app/moondream_cli"
-
     echo "Building 'cli'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
     cp -r "$SRC_DIR" "$DIST_DIR/"
@@ -211,7 +204,6 @@ prepare_dev() {
     build_cli
     build_inference
     build_hypervisor
-
     local DEV_DIR
     if [[ "$PLATFORM" = "mac" ]]; then
         DEV_DIR="$HOME/Library/MoondreamStation"
@@ -220,9 +212,7 @@ prepare_dev() {
     else
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2; exit 1
     fi
-
     mkdir -p "$DEV_DIR/inference/v0.0.1"
-
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
     local HYP_FILES=(
@@ -233,10 +223,8 @@ prepare_dev() {
     for f in "${HYP_FILES[@]}"; do
         cp "$HYP_SRC/$f" "$DEV_DIR/"
     done
-
     # copy CLI dir
     cp -r "../output/moondream-cli/moondream_cli" "$DEV_DIR/"
-
     # copy inference build
     cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
     echo "✔ dev sandbox ready → $DEV_DIR (${VERSION})"
