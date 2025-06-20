@@ -3,42 +3,18 @@
     "manifest_date": "04/20/25",
     "current_bootstrap": {
         "version": "v0.0.1",
-        "url": "http://localhost:8080/moondream_station_ubuntu_v002.tar.gz"
+        "url": "http://localhost:8080/moondream_station_ubuntu_v001.tar.gz"
     },
     "current_cli": {
         "version": "v0.0.1",
-        "url": "http://localhost:8080/moondream-cli_v002.tar.gz"
+        "url": "http://localhost:8080/moondream-cli_v001.tar.gz"
     },
     "current_hypervisor": {
         "version": "v0.0.1",
-        "url": "http://localhost:8080/hypervisor_v002.tar.gz"
+        "url": "http://localhost:8080/hypervisor_v001.tar.gz"
     },
     "models": {
         "2b": {
-            "Moondream2-INT4": {
-                "release_date": "2025-05-21",
-                "model_id": "moondream/moondream-2b-2025-04-14-4bit",
-                "revision": null,
-                "notes": "Our latest int4 model",
-                "model_size": "1.93B",
-                "dtype": "int4",
-                "support_osx": false,
-                "support_ubuntu": true,
-                "support_windows": false,
-                "inference_client": "v0.0.1"
-            },
-            "Moondream2-2025-04-14": {
-                "release_date": "2025-04-14",
-                "model_id":"vikhyatk/moondream2",
-                "revision": "2025-04-14",
-                "notes": "Our latest Float16 Moondream",
-                "model_size": "1.93B",
-                "dtype": "fp16",
-                "support_osx": true,
-                "support_ubuntu": true,
-                "support_windows": false,
-                "inference_client": "v0.0.1"
-            },
             "Moondream2-2025-3-27": {
                 "release_date": "2025-03-27",
                 "model_id":"vikhyatk/moondream2",
