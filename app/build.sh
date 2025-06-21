@@ -1,24 +1,46 @@
 #!/usr/bin/env bash
-# Usage: ./build.sh <type> <platform> <version>
+# Usage: ./build.sh <type> <platform> <version> [--manifest-url URL]
 
-# Parse args first
+# Parse args more carefully
 CLEAN=false
+MANIFEST_URL=""
 ARGS=()
-for arg in "$@"; do
-    case $arg in
-        --build-clean) CLEAN=true ;;
-        *) ARGS+=("$arg") ;;
+
+# First pass: extract flags and build clean args array
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --build-clean)
+            CLEAN=true
+            shift
+            ;;
+        --manifest-url=*)
+            MANIFEST_URL="${1#*=}"
+            shift
+            ;;
+        --manifest-url)
+            shift
+            MANIFEST_URL="$1"
+            shift
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
     esac
 done
 
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
-VERSION=${ARGS[2]:-v0.0.1}  # Default to v0.0.1
+VERSION=${ARGS[2]:-v0.0.1}
 
 echo "Building with version: $VERSION"
+if [ -n "$MANIFEST_URL" ]; then
+    echo "Using custom manifest URL: $MANIFEST_URL"
+fi
 
 update_version_strings() {
     local version=$1
+    local manifest_url=$2
     echo "Updating version strings to $version..."
     
     # Update bootstrap version (this is the main executable)
@@ -39,6 +61,16 @@ update_version_strings() {
         sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/moondream_cli/cli.py
     else
         echo "Warning: Could not find CLI version file"
+    fi
+    
+    # Update manifest URL if provided
+    if [ -n "$manifest_url" ]; then
+        echo "Updating manifest URL to: $manifest_url"
+        echo "Before update:"
+        grep "MANIFEST_URL" ../app/hypervisor/manifest.py
+        sed -i.bak "s|MANIFEST_URL = \".*\"|MANIFEST_URL = \"$manifest_url\"|" ../app/hypervisor/manifest.py
+        echo "After update:"
+        grep "MANIFEST_URL" ../app/hypervisor/manifest.py
     fi
 }
 
@@ -64,7 +96,7 @@ fi
 set -euo pipefail
 
 # Update version strings before building
-update_version_strings "$VERSION"
+update_version_strings "$VERSION" "$MANIFEST_URL"
 
 ##############################################################################
 # builders
@@ -248,7 +280,10 @@ case "$TYPE" in
     dev)         prepare_dev       ;;
     run)         run_station       ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] [version] | $0 run" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] [version] [--manifest-url URL] | $0 run" >&2
+        echo "Options:" >&2
+        echo "  --build-clean           Clean output and dev directories before building" >&2
+        echo "  --manifest-url URL      Set custom manifest URL (overrides default)" >&2
         exit 1
         ;;
 esac
