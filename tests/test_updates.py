@@ -220,25 +220,27 @@ def execute_hypervisor_update_command(child, command, executable_path, args):
         # Wait for the hypervisor update sequence
         try:
             index = child.expect([
-                r'Hypervisor.*update.*completed',                     # Successful completion (if it exists)
-                r'Server status: Hypervisor: updating hypervisor',    # Stuck state - this is our cue to exit
+                r'Hypervisor.*update.*completed',                     # Successful completion (unlikely)
+                r'Server status: Hypervisor: off, Inference: off',    # Actual stuck state
                 r'moondream>',                                         # Unexpected prompt return
             ], timeout=120)  # Longer timeout for hypervisor updates
             
             if index == 0:
-                # Update completed successfully (probably won't happen but just in case)
+                # Update completed successfully (probably won't happen)
                 logging.debug("✓ Hypervisor update completed successfully")
                 child.expect('moondream>', timeout=10)
                 
             elif index == 1:
-                # Got the stuck "updating hypervisor" message - this is expected, manually exit
-                logging.debug("Found 'updating hypervisor' state - manually exiting as expected")
+                # Got the stuck "Hypervisor: off, Inference: off" message - this is expected, manually exit
+                logging.debug("Found 'Hypervisor: off, Inference: off' state - manually exiting as expected")
                 child.sendline('exit')
                 try:
-                    child.expect(r'Exiting Moondream CLI', timeout=10)
+                    child.expect(r'Exiting Moondream CLI', timeout=5)  # Shorter timeout
                     logging.debug("Successfully exited CLI after hypervisor update")
                 except pexpect.TIMEOUT:
-                    logging.debug("Timeout waiting for exit confirmation")
+                    logging.debug("CLI exit message not received (expected during hypervisor update)")
+                except pexpect.EOF:
+                    logging.debug("CLI process ended during hypervisor update (expected)")
                 
             else:
                 # Unexpected prompt return
@@ -363,9 +365,9 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
         
         # Step 4: Verify hypervisor updated, model still available for update
         success = check_updates_and_verify(child, "After Hypervisor Update", {
-            'Bootstrap': 'Up to date',   # Still updated (v0.)
-            'Hypervisor': 'Up to date', # Now updated (v0.0.2)
-            'CLI': 'Up to date',        # Should still be v0.0.1
+            'Bootstrap': 'Up to date',   # Still updated
+            'Hypervisor': 'Up to date', # Now updated  
+            'CLI': 'Up to date',        # Still v0.0.1
             'Model': 'Update available' # Model update still pending (no model update command executed)
         })
         if not success:
