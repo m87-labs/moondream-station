@@ -12,7 +12,7 @@ def setup_logging(verbose=False):
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     
-    file_handler = logging.FileHandler('test_bootstrap_update.log', mode='w')
+    file_handler = logging.FileHandler('test_bootstrap_hypervisor_updates.log', mode='w')
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
@@ -162,15 +162,16 @@ def check_updates_and_verify(child, scenario_name, expected_components):
     
     return success
 
-def execute_update_command(child, command, executable_path, args):
-    logging.debug(f"Executing: {command}")
+def execute_bootstrap_update_command(child, command, executable_path, args):
+    """Execute bootstrap update command which automatically exits"""
+    logging.debug(f"Executing bootstrap update: {command}")
     
     try:
-        # Update commands cause server to exit, so expect_exit=True
+        # Bootstrap update causes server to exit automatically
         output = run_admin_command(child, command, 
                                  expect_pattern=r'(Restart.*for update|Starting update process)',
                                  timeout=120, expect_exit=True)
-        logging.debug("✓ Update command completed successfully")
+        logging.debug("✓ Bootstrap update command completed successfully")
         
         # Close the old child process since server has exited
         if child.isalive():
@@ -179,10 +180,10 @@ def execute_update_command(child, command, executable_path, args):
         # Start a new server instance
         try:
             child = start_server(executable_path, args)
-            logging.debug("✓ Server restarted successfully")
+            logging.debug("✓ Server restarted successfully after bootstrap update")
             return child, True
         except Exception as restart_error:
-            logging.error(f"✗ Failed to restart server after update: {restart_error}")
+            logging.error(f"✗ Failed to restart server after bootstrap update: {restart_error}")
             # Try one more time
             time.sleep(5)
             try:
@@ -194,7 +195,7 @@ def execute_update_command(child, command, executable_path, args):
                 return None, False
         
     except Exception as e:
-        logging.error(f"✗ Update command failed: {e}")
+        logging.error(f"✗ Bootstrap update command failed: {e}")
         
         # Try to clean up and start fresh server
         try:
@@ -202,7 +203,77 @@ def execute_update_command(child, command, executable_path, args):
                 child.close(force=True)
             time.sleep(3)
             child = start_server(executable_path, args)
-            logging.debug("Server recovered after update failure")
+            logging.debug("Server recovered after bootstrap update failure")
+            return child, False
+        except:
+            logging.error("Failed to recover server")
+            return None, False
+
+def execute_hypervisor_update_command(child, command, executable_path, args):
+    """Execute hypervisor update command which gets stuck and needs manual exit"""
+    logging.debug(f"Executing hypervisor update: {command}")
+    
+    try:
+        # Send the hypervisor update command
+        child.sendline(command)
+        
+        # Wait for the hypervisor update sequence
+        try:
+            index = child.expect([
+                r'Hypervisor.*update.*completed',                     # Successful completion (if it exists)
+                r'Server status: Hypervisor: updating hypervisor',    # Stuck state - this is our cue to exit
+                r'moondream>',                                         # Unexpected prompt return
+            ], timeout=120)  # Longer timeout for hypervisor updates
+            
+            if index == 0:
+                # Update completed successfully (probably won't happen but just in case)
+                logging.debug("✓ Hypervisor update completed successfully")
+                child.expect('moondream>', timeout=10)
+                
+            elif index == 1:
+                # Got the stuck "updating hypervisor" message - this is expected, manually exit
+                logging.debug("Found 'updating hypervisor' state - manually exiting as expected")
+                child.sendline('exit')
+                try:
+                    child.expect(r'Exiting Moondream CLI', timeout=10)
+                    logging.debug("Successfully exited CLI after hypervisor update")
+                except pexpect.TIMEOUT:
+                    logging.debug("Timeout waiting for exit confirmation")
+                
+            else:
+                # Unexpected prompt return
+                logging.warning("Hypervisor update returned to prompt unexpectedly")
+                
+        except pexpect.TIMEOUT:
+            logging.warning("Timeout waiting for hypervisor update messages - manually exiting")
+            child.sendline('exit')
+            try:
+                child.expect(r'Exiting Moondream CLI', timeout=10)
+            except pexpect.TIMEOUT:
+                pass
+        
+        # Close the process
+        if child.isalive():
+            child.close(force=True)
+        
+        # Start a new server instance
+        try:
+            child = start_server(executable_path, args)
+            logging.debug("✓ Server restarted successfully after hypervisor update")
+            return child, True
+        except Exception as restart_error:
+            logging.error(f"✗ Failed to restart server after hypervisor update: {restart_error}")
+            return None, False
+        
+    except Exception as e:
+        logging.error(f"✗ Hypervisor update command failed: {e}")
+        
+        # Try to clean up and start fresh server
+        try:
+            if child.isalive():
+                child.close(force=True)
+            child = start_server(executable_path, args)
+            logging.debug("Server recovered after hypervisor update failure")
             return child, False
         except:
             logging.error("Failed to recover server")
@@ -227,7 +298,7 @@ def verify_test_environment():
     logging.debug("✓ Test environment verified")
 
 def test_incremental_updates_suite(executable_path='./moondream_station', args=None, cleanup=True):
-    logging.debug("Starting bootstrap update test...")
+    logging.debug("Starting bootstrap and hypervisor update test...")
     
     try:
         verify_test_environment()
@@ -262,7 +333,7 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
         if not success:
             all_passed = False
         
-        child, update_success = execute_update_command(child, 'admin update-bootstrap --confirm', executable_path, args)
+        child, update_success = execute_bootstrap_update_command(child, 'admin update-bootstrap --confirm', executable_path, args)
         if not update_success or child is None:
             logging.error("Bootstrap update failed or server couldn't restart")
             all_passed = False
@@ -270,19 +341,38 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
                 logging.error("Aborting tests - no server available")
                 return False
         
-        # Step 3: Verify bootstrap is now up to date
-        success = check_updates_and_verify(child, "Bootstrap Updated - All Up to Date", {
-            'Bootstrap': 'Up to date',
-            'Hypervisor': 'Up to date',
-            'CLI': 'Up to date'
+        # Step 3: Hypervisor update available (Bootstrap should now be up to date)
+        update_manifest_version(3)
+        update_server_manifest(child)
+        success = check_updates_and_verify(child, "Hypervisor Update Available (v003)", {
+            'Bootstrap': 'Up to date',        # Updated in previous step
+            'Hypervisor': 'Update available', # New in v003
+            'CLI': 'Up to date'               # Still v0.0.1
+        })
+        if not success:
+            all_passed = False
+        
+        child, update_success = execute_hypervisor_update_command(child, 'admin update-hypervisor --confirm', executable_path, args)
+        if not update_success or child is None:
+            logging.error("Hypervisor update failed or server couldn't restart")
+            all_passed = False
+            if child is None:
+                logging.error("Aborting tests - no server available")
+                return False
+        
+        # Step 4: Verify both bootstrap and hypervisor are now up to date
+        success = check_updates_and_verify(child, "All Updates Applied", {
+            'Bootstrap': 'Up to date',   # Still updated
+            'Hypervisor': 'Up to date', # Now updated  
+            'CLI': 'Up to date'         # Still v0.0.1
         })
         if not success:
             all_passed = False
         
         if all_passed:
-            logging.debug("✓ Bootstrap update test passed!")
+            logging.debug("✓ Bootstrap and hypervisor update tests passed!")
         else:
-            logging.error("✗ Bootstrap update test failed!")
+            logging.error("✗ Some update tests failed!")
         
         return all_passed
         
@@ -302,7 +392,7 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Test Moondream Station bootstrap updates')
+    parser = argparse.ArgumentParser(description='Test Moondream Station bootstrap and hypervisor updates')
     parser.add_argument('--executable', default='./moondream_station',
                        help='Path to moondream_station executable')
     parser.add_argument('--verbose', action='store_true',
