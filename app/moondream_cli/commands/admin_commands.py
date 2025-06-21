@@ -355,9 +355,13 @@ class AdminCommands:
                 if key in result:
                     status = result[key]
                     model_name = status.get("model_name", "Unknown")
+                    version = status.get("version", None) or status.get("revision", "")
                     needs_update = status.get("ood", False)
                     update_status = "Update available" if needs_update else "Up to date"
-                    print(f"{name}: {model_name} - {update_status}")
+                    if key !="model":
+                        print(f"{name}: {version} - {update_status}")
+                    else:
+                        print(f"{name}: {model_name} - {update_status}")
                 else:
                     print(f"{name}: Status unknown")
 
