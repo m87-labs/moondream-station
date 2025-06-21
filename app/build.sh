@@ -127,7 +127,7 @@ PY
 ) || exit 1
         
         # Build with libpython bundled
-        local PYI_ARGS="--onefile --add-binary ${LIBPYTHON}"
+        local PYI_ARGS="--onefile"
         
     echo "Building 'inference'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
