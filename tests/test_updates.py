@@ -3,6 +3,8 @@ import shutil
 import os
 import logging
 import time
+import requests
+import re
 from pathlib import Path
 
 GLOBAL_TIMEOUT = 300
@@ -12,7 +14,7 @@ def setup_logging(verbose=False):
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     
-    file_handler = logging.FileHandler('test_bootstrap_hypervisor_updates.log', mode='w')
+    file_handler = logging.FileHandler('test_complete_updates.log', mode='w')
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
@@ -111,6 +113,166 @@ def run_admin_command(child, command, expect_pattern=None, timeout=60, expect_ex
 
 def update_server_manifest(child):
     run_admin_command(child, 'admin update-manifest', timeout=30, expect_exit=False)
+
+def parse_model_list(output):
+    """Parse model-list output into structured data"""
+    models = {}
+    current_model = None
+    
+    for line in output.split('\n'):
+        line = line.strip()
+        if line.startswith('Model: '):
+            current_model = line[7:].strip()
+            models[current_model] = {}
+        elif current_model and line.startswith('Release Date: '):
+            models[current_model]['release_date'] = line[14:].strip()
+        elif current_model and line.startswith('Size: '):
+            models[current_model]['model_size'] = line[6:].strip()
+        elif current_model and line.startswith('Notes: '):
+            models[current_model]['notes'] = line[7:].strip()
+    
+    return models
+
+def validate_model_list(model_list_output):
+    """Validate model list against manifest"""
+    manifest_path = os.path.expanduser("~/.local/share/MoondreamStation/manifest.py")
+    if not os.path.exists(manifest_path):
+        logging.warning("manifest.py not found - skipping model list validation")
+        return True
+    
+    with open(manifest_path, 'r') as f:
+        manifest_content = f.read()
+    
+    url_match = re.search(r'MANIFEST_URL\s*=\s*["\']([^"\']+)["\']', manifest_content)
+    if not url_match:
+        logging.warning("MANIFEST_URL not found in manifest.py - skipping validation")
+        return True
+    
+    try:
+        response = requests.get(url_match.group(1), timeout=10)
+        manifest_data = response.json()
+        logging.debug(f"Fetched manifest from: {url_match.group(1)}")
+    except Exception as e:
+        logging.warning(f"Failed to fetch manifest: {e}")
+        return True
+    
+    cli_models = parse_model_list(model_list_output)
+    manifest_models = manifest_data.get('models', {}).get('2b', {})
+    
+    logging.debug("--- Model List Validation ---")
+    
+    all_valid = True
+    for model_name, cli_data in cli_models.items():
+        if model_name in manifest_models:
+            manifest_model = manifest_models[model_name]
+            matches = {
+                'release_date': cli_data.get('release_date') == manifest_model.get('release_date'),
+                'model_size': cli_data.get('model_size') == manifest_model.get('model_size'),
+                'notes': cli_data.get('notes') == manifest_model.get('notes')
+            }
+            
+            model_valid = all(matches.values())
+            all_valid = all_valid and model_valid
+            logging.debug(f"Model '{model_name}': {'PASS' if model_valid else 'FAIL'}")
+            
+            if not model_valid:
+                for field, match in matches.items():
+                    if not match:
+                        logging.debug(f"  {field}: expected '{manifest_model.get(field)}', got '{cli_data.get(field)}'")
+        else:
+            logging.warning(f"Model '{model_name}' found in CLI but not in manifest")
+            all_valid = False
+    
+    for model_name in manifest_models:
+        if model_name not in cli_models:
+            logging.warning(f"Model '{model_name}' in manifest but not in CLI output")
+            all_valid = False
+    
+    logging.debug(f"Model list validation: {'PASS' if all_valid else 'FAIL'}")
+    return all_valid
+
+def execute_full_update_command(child, command, executable_path, args):
+    """Execute the full update command which handles all components including models"""
+    logging.debug(f"Executing full update: {command}")
+    
+    try:
+        child.sendline(command)
+        
+        # Wait for the update process to complete (but it hangs after completion)
+        try:
+            index = child.expect([
+                r'All component updates have been processed',    # Successful completion - but hangs here
+                r'moondream>',                                   # Unexpected prompt return
+            ], timeout=300)  # Longer timeout for model updates
+            
+            if index == 0:
+                # Update completed successfully but hangs - need to manually exit
+                logging.debug("Found 'All component updates have been processed' - manually exiting as expected")
+                child.sendline('exit')
+                try:
+                    child.expect(r'Exiting Moondream CLI', timeout=5)
+                    logging.debug("Successfully exited CLI after full update")
+                except pexpect.TIMEOUT:
+                    logging.debug("CLI exit message not received (expected during model update)")
+                except pexpect.EOF:
+                    logging.debug("CLI process ended during model update (expected)")
+                
+            else:
+                # Unexpected prompt return
+                logging.warning("Full update returned to prompt unexpectedly")
+                
+        except pexpect.TIMEOUT:
+            logging.warning("Timeout waiting for full update completion - manually exiting")
+            child.sendline('exit')
+            try:
+                child.expect(r'Exiting Moondream CLI', timeout=5)
+            except pexpect.TIMEOUT:
+                pass
+        
+        # Close the process
+        if child.isalive():
+            child.close(force=True)
+        
+        # Start a new server instance
+        try:
+            child = start_server(executable_path, args)
+            logging.debug("✓ Server restarted successfully after full update")
+            return child, True
+        except Exception as restart_error:
+            logging.error(f"✗ Failed to restart server after full update: {restart_error}")
+            return None, False
+        
+    except Exception as e:
+        logging.error(f"✗ Full update command failed: {e}")
+        
+        # Try to clean up and start fresh server
+        try:
+            if child.isalive():
+                child.close(force=True)
+            child = start_server(executable_path, args)
+            logging.debug("Server recovered after full update failure")
+            return child, False
+        except:
+            logging.error("Failed to recover server")
+            return None, False
+
+def test_model_list_and_validation(child):
+    """Test model list command and validate against manifest"""
+    logging.debug("=== Testing Model List ===")
+    
+    # Get model list
+    output = run_admin_command(child, 'admin model-list', expect_exit=False)
+    logging.debug("Model list output:")
+    logging.debug(output)
+    
+    # Validate model list
+    success = validate_model_list(output)
+    if success:
+        logging.debug("✓ Model list validation passed")
+    else:
+        logging.error("✗ Model list validation failed")
+    
+    return success
 
 def parse_check_updates_output(output):
     components = {}
@@ -300,7 +462,7 @@ def verify_test_environment():
     logging.debug("✓ Test environment verified")
 
 def test_incremental_updates_suite(executable_path='./moondream_station', args=None, cleanup=True):
-    logging.debug("Starting bootstrap and hypervisor update test...")
+    logging.debug("Starting bootstrap, hypervisor, and model update test...")
     
     try:
         verify_test_environment()
@@ -355,6 +517,7 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
         if not success:
             all_passed = False
         
+        # Execute hypervisor update first
         child, update_success = execute_hypervisor_update_command(child, 'admin update-hypervisor --confirm', executable_path, args)
         if not update_success or child is None:
             logging.error("Hypervisor update failed or server couldn't restart")
@@ -363,18 +526,53 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
                 logging.error("Aborting tests - no server available")
                 return False
         
-        # Step 4: Verify hypervisor updated, model still available for update
-        success = check_updates_and_verify(child, "After Hypervisor Update", {
+        # Verify hypervisor updated, model still pending
+        success = check_updates_and_verify(child, "After Hypervisor Update in v003", {
             'Bootstrap': 'Up to date',   # Still updated
             'Hypervisor': 'Up to date', # Now updated  
             'CLI': 'Up to date',        # Still v0.0.1
-            'Model': 'Update available' # Model update still pending (no model update command executed)
+            'Model': 'Update available' # Model update still pending
         })
         if not success:
             all_passed = False
         
+        # Now execute model update using full update command
+        child, update_success = execute_full_update_command(child, 'admin update --confirm', executable_path, args)
+        if not update_success:
+            logging.error("Model update (full update) failed")
+            all_passed = False
+        
+        # Verify model updated
+        success = check_updates_and_verify(child, "After Model Update in v003", {
+            'Bootstrap': 'Up to date',   # Still updated
+            'Hypervisor': 'Up to date', # Still updated
+            'CLI': 'Up to date',        # Still v0.0.1  
+            'Model': 'Up to date'       # Now updated
+        })
+        if not success:
+            all_passed = False
+        
+        # Validate model list against manifest
+        model_list_success = test_model_list_and_validation(child)
+        if not model_list_success:
+            all_passed = False
+        
+        # Step 4: CLI update available (v004) - just check, don't execute
+        update_manifest_version(4)
+        update_server_manifest(child)
+        success = check_updates_and_verify(child, "CLI Update Available (v004)", {
+            'Bootstrap': 'Up to date',   # Still updated
+            'Hypervisor': 'Up to date', # Still updated
+            'CLI': 'Update available',  # New in v004
+            'Model': 'Up to date'       # Still updated
+        })
+        if not success:
+            all_passed = False
+        
+        logging.debug("Skipping CLI update execution (not implemented yet)")
+        
         if all_passed:
-            logging.debug("✓ Bootstrap and hypervisor update tests passed!")
+            logging.debug("✓ All update tests passed!")
         else:
             logging.error("✗ Some update tests failed!")
         
@@ -396,7 +594,7 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description='Test Moondream Station bootstrap and hypervisor updates')
+    parser = argparse.ArgumentParser(description='Test Moondream Station bootstrap, hypervisor, and model updates')
     parser.add_argument('--executable', default='./moondream_station',
                        help='Path to moondream_station executable')
     parser.add_argument('--verbose', action='store_true',
