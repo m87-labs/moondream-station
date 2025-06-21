@@ -341,13 +341,14 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
                 logging.error("Aborting tests - no server available")
                 return False
         
-        # Step 3: Hypervisor update available (Bootstrap should now be up to date)
+        # Step 3: Hypervisor + Model updates available (Bootstrap should now be up to date)
         update_manifest_version(3)
         update_server_manifest(child)
-        success = check_updates_and_verify(child, "Hypervisor Update Available (v003)", {
+        success = check_updates_and_verify(child, "Hypervisor + Model Updates Available (v003)", {
             'Bootstrap': 'Up to date',        # Updated in previous step
             'Hypervisor': 'Update available', # New in v003
-            'CLI': 'Up to date'               # Still v0.0.1
+            'CLI': 'Up to date',              # Still v0.0.1
+            'Model': 'Update available'       # New model in v003
         })
         if not success:
             all_passed = False
@@ -360,11 +361,12 @@ def test_incremental_updates_suite(executable_path='./moondream_station', args=N
                 logging.error("Aborting tests - no server available")
                 return False
         
-        # Step 4: Verify both bootstrap and hypervisor are now up to date
-        success = check_updates_and_verify(child, "All Updates Applied", {
-            'Bootstrap': 'Up to date',   # Still updated
-            'Hypervisor': 'Up to date', # Now updated  
-            'CLI': 'Up to date'         # Still v0.0.1
+        # Step 4: Verify hypervisor updated, model still available for update
+        success = check_updates_and_verify(child, "After Hypervisor Update", {
+            'Bootstrap': 'Up to date',   # Still updated (v0.)
+            'Hypervisor': 'Up to date', # Now updated (v0.0.2)
+            'CLI': 'Up to date',        # Should still be v0.0.1
+            'Model': 'Update available' # Model update still pending (no model update command executed)
         })
         if not success:
             all_passed = False
