@@ -3,6 +3,8 @@ import re
 import json
 import socket
 import logging
+import time
+import functools
 import shutil
 import psutil
 import requests
@@ -196,3 +198,141 @@ def validate_model_list(model_list_output):
             all_valid = False
     
     logging.debug(f"Model list validation: {'PASS' if all_valid else 'FAIL'}")
+
+# ============== Logging Utils ==================
+
+class DebugTracer:
+    @staticmethod
+    def log(message, category="GENERAL"):
+        trace_logger = logging.getLogger('trace')
+        trace_logger.debug(f"[{category}] {message}")
+    
+    @staticmethod
+    def log_command(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            DebugTracer.log(f"ENTER {func.__name__} with args={args[1:]} kwargs={kwargs}", "COMMAND")
+            start_time = time.time()
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start_time
+                DebugTracer.log(f"EXIT {func.__name__} SUCCESS duration={duration:.3f}s result_length={len(str(result)) if result else 0}", "COMMAND")
+                return result
+            except Exception as e:
+                duration = time.time() - start_time
+                DebugTracer.log(f"EXIT {func.__name__} ERROR duration={duration:.3f}s error={str(e)}", "COMMAND")
+                raise
+        return wrapper
+    
+    @staticmethod
+    def log_operation(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            DebugTracer.log(f"OPERATION {func.__name__} START", "OPERATION")
+            start_time = time.time()
+            try:
+                result = func(*args, **kwargs)
+                duration = time.time() - start_time
+                DebugTracer.log(f"OPERATION {func.__name__} SUCCESS duration={duration:.3f}s", "OPERATION")
+                return result
+            except Exception as e:
+                duration = time.time() - start_time
+                DebugTracer.log(f"OPERATION {func.__name__} FAILED duration={duration:.3f}s error={str(e)}", "OPERATION")
+                raise
+        return wrapper
+
+def clean_output(text):
+    if not text:
+        return ""
+    
+    # Remove ANSI escape sequences
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    text = ansi_escape.sub('', text)
+    
+    # Handle carriage returns properly - keep only the final state of each line
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        if '\r' in line:
+            # Split by \r and take the last non-empty part
+            parts = line.split('\r')
+            final_part = ""
+            for part in reversed(parts):
+                if part.strip():
+                    final_part = part
+                    break
+            if final_part.strip():
+                cleaned_lines.append(final_part)
+        else:
+            if line.strip():
+                cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
+def format_output_for_log(text):
+    if not text:
+        return "[empty]"
+    
+    cleaned = clean_output(text)
+    if not cleaned.strip():
+        return "[whitespace/spinner only]"
+    
+    # Return the full cleaned output with preserved newlines
+    return f"\n{cleaned}"
+
+class TracedProcess:
+    def __init__(self, process):
+        self.process = process
+        self._command_counter = 0
+    
+    def sendline(self, line):
+        self._command_counter += 1
+        DebugTracer.log(f"CMD#{self._command_counter:03d} SEND: {line}", "PEXPECT")
+        return self.process.sendline(line)
+    
+    def expect(self, pattern, timeout=30):
+        DebugTracer.log(f"CMD#{self._command_counter:03d} EXPECT: {pattern} (timeout={timeout})", "PEXPECT")
+        start_time = time.time()
+        try:
+            result = self.process.expect(pattern, timeout=timeout)
+            duration = time.time() - start_time
+            
+            before_text = self.process.before.decode('utf-8', errors='replace') if self.process.before else ""
+            after_text = self.process.after.decode('utf-8', errors='replace') if self.process.after else ""
+            
+            DebugTracer.log(f"CMD#{self._command_counter:03d} MATCH: pattern_index={result} duration={duration:.3f}s", "PEXPECT")
+            
+            # Log formatted output
+            formatted_before = format_output_for_log(before_text)
+            if formatted_before != "[empty]":
+                DebugTracer.log(f"CMD#{self._command_counter:03d} OUTPUT:{formatted_before}", "PEXPECT")
+            
+            if after_text.strip():
+                DebugTracer.log(f"CMD#{self._command_counter:03d} MATCHED_TEXT: {clean_output(after_text)}", "PEXPECT")
+            
+            return result
+        except Exception as e:
+            duration = time.time() - start_time
+            before_text = self.process.before.decode('utf-8', errors='replace') if self.process.before else ""
+            
+            DebugTracer.log(f"CMD#{self._command_counter:03d} TIMEOUT/ERROR: {str(e)} duration={duration:.3f}s", "PEXPECT")
+            
+            formatted_before = format_output_for_log(before_text)
+            if formatted_before != "[empty]":
+                DebugTracer.log(f"CMD#{self._command_counter:03d} ERROR_OUTPUT:{formatted_before}", "PEXPECT")
+            
+            raise
+    
+    def __getattr__(self, name):
+        return getattr(self.process, name)
+
+def setup_trace_logging(debug_trace=False):
+    if debug_trace:
+        trace_handler = logging.FileHandler('test_trace_debug.log', mode='w')
+        trace_handler.setLevel(logging.DEBUG)
+        trace_handler.setFormatter(logging.Formatter('%(asctime)s.%(msecs)03d - TRACE - %(message)s', '%H:%M:%S'))
+        trace_logger = logging.getLogger('trace')
+        trace_logger.setLevel(logging.DEBUG)
+        trace_logger.addHandler(trace_handler)
+        trace_logger.propagate = False
