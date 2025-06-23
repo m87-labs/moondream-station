@@ -25,7 +25,7 @@
                 "support_osx": false,
                 "support_ubuntu": true,
                 "support_windows": false,
-                "inference_client": "v0.0.1"
+                "inference_client": "v0.0.2"
             },
             "Moondream2-2025-04-14": {
                 "release_date": "2025-04-14",
@@ -37,7 +37,7 @@
                 "support_osx": true,
                 "support_ubuntu": true,
                 "support_windows": false,
-                "inference_client": "v0.0.1"
+                "inference_client": "v0.0.2"
             },
             "Moondream2-2025-3-27": {
                 "release_date": "2025-03-27",
