@@ -3,15 +3,15 @@
     "manifest_date": "04/20/25",
     "current_bootstrap": {
         "version": "v0.0.1",
-        "url": ""
+        "url": "https://depot.moondream.ai/station/md_station_ubuntu.tar.gz"
     },
     "current_cli": {
         "version": "v0.0.1",
-        "url": ""
+        "url": "https://depot.moondream.ai/station/md_station_cli_ubuntu.tar.gz"
     },
     "current_hypervisor": {
         "version": "v0.0.1",
-        "url": ""
+        "url": "https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
     },
     "models": {
         "2b": {
