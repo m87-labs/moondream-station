@@ -354,14 +354,10 @@ class AdminCommands:
             for key, name in components.items():
                 if key in result:
                     status = result[key]
-                    model_name = status.get("model_name", "Unknown")
-                    version = status.get("version", None) or status.get("revision", "")
+                    identifier = status.get("model_name") or status.get("version", "Unknown")
                     needs_update = status.get("ood", False)
                     update_status = "Update available" if needs_update else "Up to date"
-                    if key !="model":
-                        print(f"{name}: {version} - {update_status}")
-                    else:
-                        print(f"{name}: {model_name} - {update_status}")
+                    print(f"{name}: {identifier} - {update_status}")
                 else:
                     print(f"{name}: Status unknown")
 
