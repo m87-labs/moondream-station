@@ -10,7 +10,7 @@ def setup_logging(verbose=False):
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     
-    file_handler = logging.FileHandler('test_startup.log', mode='w')
+    file_handler = logging.FileHandler('test_capabilities.log', mode='w')
     file_handler.setLevel(logging.DEBUG)
     file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(file_formatter)
