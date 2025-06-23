@@ -33,11 +33,6 @@ TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
 VERSION=${ARGS[2]:-v0.0.1}
 
-echo "Building with version: $VERSION"
-if [ -n "$MANIFEST_URL" ]; then
-    echo "Using custom manifest URL: $MANIFEST_URL"
-fi
-
 update_version_strings() {
     local version=$1
     local manifest_url=$2
@@ -95,8 +90,16 @@ fi
 
 set -euo pipefail
 
-# Update version strings before building
-update_version_strings "$VERSION" "$MANIFEST_URL"
+# Only show build messages when actually building, not when running
+if [[ "$TYPE" != "run" ]]; then
+    echo "Building with version: $VERSION"
+    if [ -n "$MANIFEST_URL" ]; then
+        echo "Using custom manifest URL: $MANIFEST_URL"
+    fi
+    
+    # Update version strings before building
+    update_version_strings "$VERSION" "$MANIFEST_URL"
+fi
 
 ##############################################################################
 # builders
