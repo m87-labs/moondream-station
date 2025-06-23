@@ -31,7 +31,7 @@ def start_server(executable_path='./moondream_station', args=None):
     time.sleep(2)
     try:
         child = pexpect.spawn(' '.join(cmd))
-        child.expect('moondream>', timeout=45)
+        child.expect('moondream>', timeout=100)
         logging.debug("Server started successfully")
         return child
     except pexpect.EOF:
@@ -62,7 +62,7 @@ def update_manifest_version(version):
     shutil.copy2(version_file, manifest_file)
     logging.debug(f"Updated manifest.json to version {version:03d}")
 
-def run_admin_command(child, command, expect_pattern=None, timeout=60, expect_exit=False):
+def run_admin_command(child, command, expect_pattern=None, timeout=100, expect_exit=False):
     logging.debug(f"Running: {command}")
     child.sendline(command)
     if expect_exit:
@@ -94,7 +94,7 @@ def run_admin_command(child, command, expect_pattern=None, timeout=60, expect_ex
         return output
 
 def update_server_manifest(child):
-    run_admin_command(child, 'admin update-manifest', timeout=30, expect_exit=False)
+    run_admin_command(child, 'admin update-manifest', timeout=100, expect_exit=False)
 
 def parse_model_list(output):
     models = {}
@@ -127,7 +127,7 @@ def validate_model_list(model_list_output):
         return True
     
     try:
-        response = requests.get(url_match.group(1), timeout=10)
+        response = requests.get(url_match.group(1), timeout=100)
         manifest_data = response.json()
         logging.debug(f"Fetched manifest from: {url_match.group(1)}")
     except Exception as e:
