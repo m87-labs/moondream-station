@@ -213,9 +213,12 @@ case "$TYPE" in
     hypervisor)  build_hypervisor  ;;
     cli)         build_cli         ;;
     dev)         prepare_dev       ;;
-    run)         run_station       ;;
+    run)         run_station "$@"  ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run [options]" >&2
+        echo "Options:" >&2
+        echo "  --build-clean           Clean output and dev directories before building" >&2
+        echo "  --manifest-url URL      Set custom manifest URL (overrides default)" >&2
         exit 1
         ;;
 esac
