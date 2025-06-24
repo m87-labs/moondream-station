@@ -1,78 +1,25 @@
 #!/usr/bin/env bash
+
 # Parse args
 CLEAN=false
 ARGS=()
 MANIFEST_URL=""
-# First pass: extract flags and build clean args array
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --build-clean)
-            CLEAN=true
-            shift
-            ;;
-        --manifest-url=*)
-            MANIFEST_URL="${1#*=}"
-            shift
-            ;;
-        --manifest-url)
-            shift
-            MANIFEST_URL="$1"
-            shift
-            ;;
-        *)
-            ARGS+=("$1")
-            shift
-            ;;
+for arg in "$@"; do
+    case $arg in
+        --build-clean) CLEAN=true ;;
+        --manifest-url=*) MANIFEST_URL="${arg#*=}" ;;
+        *) ARGS+=("$arg") ;;
     esac
 done
 
+if [[ -n "$MANIFEST_URL" ]]; then
+    export MANIFEST_URL
+    echo "Setting MANIFEST_URL environment variable: $MANIFEST_URL"
+fi
+
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
-VERSION=${ARGS[2]:-}  # No default version
 
-update_version_strings() {
-    local version=$1
-    local manifest_url=$2
-    echo "Updating version strings to $version..."
-    
-    # Update bootstrap version (this is the main executable)
-    sed -i.bak "s/BOOTSTRAP_VERSION = \".*\"/BOOTSTRAP_VERSION = \"$version\"/" ../app/hypervisor/bootstrap.py
-    
-    # Update hypervisor version (if it exists)
-    if grep -q "HYPERVISOR_VERSION" ../app/hypervisor/hypervisor.py; then
-        sed -i.bak "s/HYPERVISOR_VERSION = \".*\"/HYPERVISOR_VERSION = \"$version\"/" ../app/hypervisor/hypervisor.py
-    fi
-    
-    # Update inference version  
-    sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/inference_client/main.py
-    
-    # Update CLI version (check if **init**.py exists, if not try other locations)
-    if [ -f "../app/moondream_cli/__init__.py" ]; then
-        sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/moondream_cli/__init__.py
-    elif [ -f "../app/moondream_cli/cli.py" ]; then
-        sed -i.bak "s/VERSION = \".*\"/VERSION = \"$version\"/" ../app/moondream_cli/cli.py
-    else
-        echo "Warning: Could not find CLI version file"
-    fi
-    
-    # Update manifest URL if provided
-    if [ -n "$manifest_url" ]; then
-        echo "Updating manifest URL to: $manifest_url"
-        echo "Before update:"
-        grep "MANIFEST_URL" ../app/hypervisor/manifest.py
-        sed -i.bak "s|MANIFEST_URL = \".*\"|MANIFEST_URL = \"$manifest_url\"|" ../app/hypervisor/manifest.py
-        echo "After update:"
-        grep "MANIFEST_URL" ../app/hypervisor/manifest.py
-    fi
-}
-restore_version_strings() {
-    echo "Restoring original version strings..."
-    # Restore from .bak files
-    find ../app -name "*.bak" -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
-}
-
-# Cleanup trap to restore version strings if the script exits unexpectedly
-trap restore_version_strings EXIT
 if $CLEAN; then
     echo "Cleaning output and dev directories..."
     rm -rf ../output
@@ -84,22 +31,10 @@ if $CLEAN; then
 fi
 
 set -euo pipefail
-# Only show build messages when actually building, not when running
-if [[ "$TYPE" != "run" ]]; then
-    if [ -n "$VERSION" ]; then
-        echo "Building with version: $VERSION"
-    else
-        echo "Building without version suffix"
-    fi
-    if [ -n "$MANIFEST_URL" ]; then
-        echo "Using custom manifest URL: $MANIFEST_URL"
-    fi
-    
-    # Update version strings before building (only if version provided)
-    if [ -n "$VERSION" ]; then
-        update_version_strings "$VERSION" "$MANIFEST_URL"
-    fi
-fi
+
+TYPE=${1:-}            # inference | hypervisor | cli | dev
+PLATFORM=${2:-ubuntu}  # mac | ubuntu  (default ubuntu)
+
 ##############################################################################
 # builders
 ##############################################################################
@@ -150,16 +85,8 @@ PY
         cp "$SRC_DIR/$f" "$DIST_DIR"
     done
     echo "!!!!!! my current working dir is $PWD"
-    
-    # Create tarball with or without version suffix
-    if [ -n "$VERSION" ]; then
-        local VERSION_SUFFIX="_${VERSION//./}"
-        tar -czf "../output/inference_bootstrap${VERSION_SUFFIX}.tar.gz" -C "../output" "inference_bootstrap"
-        echo "✔ inference → $DIST_DIR (${VERSION})"
-    else
-        tar -czf "../output/inference_bootstrap.tar.gz" -C "../output" "inference_bootstrap"
-        echo "✔ inference → $DIST_DIR"
-    fi
+    tar -czf "../output/inference_bootstrap.tar.gz" -C "../output" "inference_bootstrap"
+    echo "✔ inference → $DIST_DIR"
 }
 
 build_hypervisor() {
@@ -222,18 +149,9 @@ PY
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
-    
-    # Create tarballs with or without version suffix
-    if [ -n "$VERSION" ]; then
-        local VERSION_SUFFIX="_${VERSION//./}"
-        tar -czf "../output/hypervisor${VERSION_SUFFIX}.tar.gz" -C "$SUP_DIR" .
-        tar -czf "../output/moondream_station_ubuntu${VERSION_SUFFIX}.tar.gz" -C "$DIST_DIR" moondream_station
-        echo "✔ hypervisor → $DIST_DIR (${VERSION})"
-    else
-        tar -czf "../output/hypervisor.tar.gz" -C "$SUP_DIR" .
-        tar -czf "../output/moondream_station_ubuntu.tar.gz" -C "$DIST_DIR" moondream_station
-        echo "✔ hypervisor → $DIST_DIR"
-    fi
+    tar -czf "../output/hypervisor.tar.gz" -C "$SUP_DIR" .
+    tar -czf "../output/moondream_station_ubuntu.tar.gz" -C "$DIST_DIR" moondream_station
+    echo "✔ hypervisor → $DIST_DIR"
 }
 
 build_cli() {
@@ -244,15 +162,8 @@ build_cli() {
     echo "Building 'cli'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
     cp -r "$SRC_DIR" "$DIST_DIR/"
-
-    if [ -n "$VERSION" ]; then
-        local VERSION_SUFFIX="_${VERSION//./}"
-        tar -czf "../output/moondream-cli${VERSION_SUFFIX}.tar.gz" -C "$DIST_DIR" moondream_cli
-        echo "✔ cli → $DIST_DIR (${VERSION})"
-    else
-        tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
-        echo "✔ cli → $DIST_DIR"
-    fi
+    tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
+    echo "✔ cli → $DIST_DIR"
 }
 
 ##############################################################################
@@ -271,10 +182,9 @@ prepare_dev() {
     else
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2; exit 1
     fi
-    
-    # Use version for directory structure or default to v0.0.1 if no version specified
+
     mkdir -p "$DEV_DIR/inference/v0.0.1"
-    
+
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
     local HYP_FILES=(
@@ -291,12 +201,8 @@ prepare_dev() {
 
     # copy inference build
     cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
-    
-    if [ -n "$VERSION" ]; then
-        echo "✔ dev sandbox ready → $DEV_DIR (${VERSION})"
-    else
-        echo "✔ dev sandbox ready → $DEV_DIR"
-    fi
+
+    echo "✔ dev sandbox ready → $DEV_DIR"
 }
 
 ##############################################################################
@@ -316,10 +222,7 @@ case "$TYPE" in
     dev)         prepare_dev       ;;
     run)         run_station       ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] [version] [--manifest-url URL] | $0 run" >&2
-        echo "Options:" >&2
-        echo "  --build-clean           Clean output and dev directories before building" >&2
-        echo "  --manifest-url URL      Set custom manifest URL (overrides default)" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
         exit 1
         ;;
 esac
