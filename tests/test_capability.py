@@ -1,19 +1,11 @@
 import pexpect
 import logging
-import os
 import argparse
 from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list
-
 # Timeout configurations
-SERVER_START_TIMEOUT = 30
-SERVER_EXIT_TIMEOUT = 10
-HEALTH_CHECK_TIMEOUT = 30
-MODEL_LIST_TIMEOUT = 30
-MODEL_SWITCH_TIMEOUT = 120
-MODEL_SWITCH_CONFIRM_TIMEOUT = 10
-CAPTION_STREAM_TIMEOUT = 10
-DEFAULT_CAPABILITY_TIMEOUT = 60
-GLOBAL_TIMEOUT = 300
+QUICK_TIMEOUT = 10
+STANDARD_TIMEOUT = 30
+LONG_TIMEOUT = 120
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
 
 def setup_logging(verbose=False):
@@ -39,20 +31,20 @@ def start_server(executable_path='./moondream_station', args=None):
         cmd.extend(args)
     child = pexpect.spawn(' '.join(cmd))
     logging.debug(f"Starting up Moondream Station with command: {' '.join(cmd)}")
-    child.expect('moondream>', timeout=SERVER_START_TIMEOUT)
+    child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     return child
 
 def end_server(child):
     # just check for exit message, don't wait for process to die, since bad shutdown in a known bug.
     child.sendline('exit')
-    child.expect(r'Exiting Moondream CLI', timeout=SERVER_EXIT_TIMEOUT)
+    child.expect(r'Exiting Moondream CLI', timeout=QUICK_TIMEOUT)
     
     if child.isalive():
         child.close(force=True)
 
 def check_health(child):
     child.sendline('health')
-    child.expect('moondream>', timeout=HEALTH_CHECK_TIMEOUT)
+    child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     health_prompt = child.before.decode()
     logging.debug("Health Check.")
     logging.debug(health_prompt)
@@ -66,13 +58,13 @@ def parse_model_list_output(output):
             models.append(line[7:].strip())
     return models
 
-def test_capability(child, command, expected_response, timeout=DEFAULT_CAPABILITY_TIMEOUT):
+def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT):
     logging.debug(f"Testing: {command}")
     child.sendline(command)
     
     if 'caption' in command:
         try:
-            child.expect('Generating streaming caption...', timeout=CAPTION_STREAM_TIMEOUT)
+            child.expect('Generating streaming caption...', timeout=QUICK_TIMEOUT)
         except:
             pass
     
@@ -169,7 +161,7 @@ def test_model_capabilities(child, model_name):
 
 def test_all_models(child):
     child.sendline('admin model-list')
-    child.expect('moondream>', timeout=MODEL_LIST_TIMEOUT)
+    child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     model_list_output = child.before.decode()
     logging.debug("Model list output:")
     logging.debug(model_list_output)
@@ -185,8 +177,8 @@ def test_all_models(child):
         
         child.sendline(f'admin model-use "{model_name}" --confirm')
         try:
-            child.expect('Model initialization completed successfully!', timeout=MODEL_SWITCH_TIMEOUT)
-            child.expect('moondream>', timeout=MODEL_SWITCH_CONFIRM_TIMEOUT)
+            child.expect('Model initialization completed successfully!', timeout=LONG_TIMEOUT)
+            child.expect('moondream>', timeout=QUICK_TIMEOUT)
             logging.debug(f"Successfully switched to model: {model_name}")
             logging.debug("")
             
