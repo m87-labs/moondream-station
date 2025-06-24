@@ -170,6 +170,7 @@ prepare_dev() {
     build_cli
     build_inference
     build_hypervisor
+
     local DEV_DIR
     if [[ "$PLATFORM" = "mac" ]]; then
         DEV_DIR="$HOME/Library/MoondreamStation"
@@ -178,7 +179,9 @@ prepare_dev() {
     else
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2; exit 1
     fi
+
     mkdir -p "$DEV_DIR/inference/v0.0.1"
+
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
     local HYP_FILES=(
@@ -189,12 +192,16 @@ prepare_dev() {
     for f in "${HYP_FILES[@]}"; do
         cp "$HYP_SRC/$f" "$DEV_DIR/"
     done
+
     # copy CLI dir
     cp -r "../output/moondream-cli/moondream_cli" "$DEV_DIR/"
+
     # copy inference build
     cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
+
     echo "✔ dev sandbox ready → $DEV_DIR"
 }
+
 ##############################################################################
 # execution
 ##############################################################################
