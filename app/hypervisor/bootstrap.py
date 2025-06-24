@@ -388,6 +388,7 @@ def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger, manifest_
             cmd.extend(["--manifest-url", manifest_url])
 
         logger.info(f"Launching {main_py} via {python_bin}")
+        logger.info(f"Command to execute: {' '.join(cmd)}")
 
         proc = subprocess.Popen(cmd)
         return_code = proc.wait()
@@ -819,7 +820,9 @@ def main(verbose: bool = False, manifest_url: str = None):
     elapsed_time = time.time() - start_time
     logger.info(f"Bootup completed in {elapsed_time:.2f} seconds")
 
+    logger.info(f"Main function manifest_url: {manifest_url}")
     run_main_loop(venv_dir, app_dir, logger, manifest_url=manifest_url)
+    
 
 
 if __name__ == "__main__":
