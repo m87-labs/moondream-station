@@ -8,6 +8,15 @@ import re
 from pathlib import Path
 from utils import DebugTracer, TracedProcess, setup_trace_logging
 
+import pexpect
+import shutil
+import os
+import logging
+import time
+import requests
+import re
+from pathlib import Path
+
 MANIFEST_DIR = "./test_manifests"
 
 class Timeouts:
@@ -41,6 +50,11 @@ class Patterns:
         'release_date': 'Release Date: ',
         'size': 'Size: ',
         'notes': 'Notes: '
+    }
+    
+    MODEL_CHANGE = {
+        'success': r'Model successfully changed to',
+        'initialization': r'Model initialization completed successfully'
     }
 
 class Config:
@@ -151,7 +165,7 @@ class Manifest:
             DebugTracer.log(f"Manifest directory not found: {MANIFEST_DIR}", "MANIFEST")
             raise FileNotFoundError(f"Manifest directory {MANIFEST_DIR} not found")
         
-        required = ['manifest_v001.json', 'manifest_v002.json', 'manifest_v003.json', 'manifest_v004.json']
+        required = ['manifest_v001.json', 'manifest_v002.json', 'manifest_v003.json', 'manifest_v004.json', 'manifest_v005.json']
         missing = []
         for manifest_file in required:
             file_path = manifest_dir / manifest_file
@@ -224,6 +238,18 @@ class Commands:
     @DebugTracer.log_command
     def model_list(self):
         return self.run('admin model-list')
+    
+    @DebugTracer.log_command  
+    def model_use(self, model_name):
+        return self.run(f'admin model-use {model_name} --confirm', timeout=Timeouts.UPDATE)
+    
+    @DebugTracer.log_command
+    def status(self):
+        return self.run('admin status')
+    
+    @DebugTracer.log_command
+    def get_config(self):
+        return self.run('admin get-config')
 
 class Parser:
     @staticmethod
@@ -270,6 +296,17 @@ class Parser:
                 models[current_model]['notes'] = line[len(Patterns.MODEL_FIELDS['notes']):].strip()
         logging.debug(f"Parsed models: {list(models.keys())}")
         return models
+    
+    @staticmethod
+    def parse_config(output):
+        config = {}
+        for line in output.split('\n'):
+            line = line.strip()
+            if ':' in line and not line.startswith('Getting server configuration'):
+                key, value = line.split(':', 1)
+                config[key.strip()] = value.strip()
+        logging.debug(f"Parsed config: {config}")
+        return config
 
 class Validator:
     @staticmethod
@@ -374,6 +411,81 @@ class Validator:
         DebugTracer.log(f"Model list validation: {'PASS' if all_valid else 'FAIL'}", "VALIDATOR")
         logging.debug(f"Model list validation: {'PASS' if all_valid else 'FAIL'}")
         return all_valid
+
+    @staticmethod
+    def model_switch(process, model_name, expected_inference_client=None):
+        """Test model switching and verify inference client updates."""
+        
+        DebugTracer.log(f"Testing model switch to: {model_name}", "VALIDATOR")
+        logging.debug(f"=== Testing Model Switch to {model_name} ===")
+        
+        cmd = Commands(process)  # Use your existing Commands class
+        
+        # Get current state before switch  
+        DebugTracer.log("Getting config before model switch", "VALIDATOR")
+        config_before = cmd.get_config()  # Use Commands.get_config()
+        parsed_config_before = Parser.parse_config(config_before)
+        
+        current_model = parsed_config_before.get('active_model', 'unknown')
+        current_inference_client = parsed_config_before.get('active_inference_client', 'unknown')
+        
+        DebugTracer.log(f"Before switch - Model: {current_model}, Inference Client: {current_inference_client}", "VALIDATOR")
+        logging.debug(f"Before switch - Model: {current_model}, Inference Client: {current_inference_client}")
+        
+        # Execute model switch
+        DebugTracer.log(f"Switching to model: {model_name}", "VALIDATOR")
+        output = cmd.model_use(model_name)  # Use Commands.model_use()
+        
+        # Check for success indicators in output
+        if Patterns.MODEL_CHANGE['initialization'] in output:
+            DebugTracer.log(f"Model switch command succeeded", "VALIDATOR")
+            logging.debug(f"Model switch to {model_name} succeeded")
+        else:
+            DebugTracer.log(f"Model switch command failed - success pattern not found", "VALIDATOR")
+            logging.error(f"Model switch to {model_name} failed - success pattern not found")
+            return False
+        
+        # Get config after switch to verify changes
+        DebugTracer.log("Getting config after model switch", "VALIDATOR")
+        config_after = cmd.get_config()  # Use Commands.get_config()
+        parsed_config_after = Parser.parse_config(config_after)
+        
+        new_model = parsed_config_after.get('active_model', 'unknown')
+        new_inference_client = parsed_config_after.get('active_inference_client', 'unknown')
+        
+        DebugTracer.log(f"After switch - Model: {new_model}, Inference Client: {new_inference_client}", "VALIDATOR")
+        logging.debug(f"After switch - Model: {new_model}, Inference Client: {new_inference_client}")
+        
+        # Verify active model changed
+        if new_model == model_name:
+            DebugTracer.log(f"✓ Active model confirmed: {model_name}", "VALIDATOR")
+            logging.debug(f"Active model confirmed: {model_name}")
+        else:
+            DebugTracer.log(f"✗ Active model verification failed - expected {model_name}, got {new_model}", "VALIDATOR")
+            logging.error(f"Active model not set to {model_name}, got {new_model}")
+            return False
+        
+        # Verify inference client if specified
+        if expected_inference_client:
+            if new_inference_client == expected_inference_client:
+                DebugTracer.log(f"✓ Inference client confirmed: {expected_inference_client}", "VALIDATOR")
+                logging.debug(f"Inference client confirmed: {expected_inference_client}")
+                
+                # Log if inference client actually changed
+                if current_inference_client != new_inference_client:
+                    DebugTracer.log(f"✓ Inference client updated: {current_inference_client} → {new_inference_client}", "VALIDATOR")
+                    logging.debug(f"Inference client updated: {current_inference_client} → {new_inference_client}")
+                else:
+                    DebugTracer.log(f"✓ Inference client unchanged: {new_inference_client}", "VALIDATOR")
+                    logging.debug(f"Inference client unchanged: {new_inference_client}")
+            else:
+                DebugTracer.log(f"✗ Inference client verification failed - expected {expected_inference_client}, got {new_inference_client}", "VALIDATOR")
+                logging.error(f"Inference client not set to {expected_inference_client}, got {new_inference_client}")
+                return False
+        
+        DebugTracer.log(f"Model switch validation: PASS", "VALIDATOR")
+        logging.debug(f"Model switch to {model_name} validation: PASS")
+        return True
 
 class Updater:
     def __init__(self, server):
@@ -678,6 +790,46 @@ class TestSuite:
         })
         all_passed = all_passed and success
         
+        # Step 5: Inference Client Update Test (v005)
+        Manifest.update_version(5)
+        cmd = Commands(self.server.process)
+        cmd.update_manifest()
+        
+        # Test inference client updates through model switching
+        logging.debug("=== Testing Inference Client Updates (v005) ===")
+        
+        # Switch to model requiring inference client v0.0.1
+        success = Validator.model_switch(
+            self.server.process, 
+            "Moondream2-2025-3-27",
+            expected_inference_client="v0.0.1"
+        )
+        if not success:
+            logging.error("Failed to switch to model with inference client v0.0.1")
+            all_passed = False
+        
+        # Switch to model requiring inference client v0.0.2 (should trigger inference client update)
+        success = Validator.model_switch(
+            self.server.process,
+            "Moondream2-2025-04-14", 
+            expected_inference_client="v0.0.2"
+        )
+        if not success:
+            logging.error("Failed to switch to model with inference client v0.0.2")
+            all_passed = False
+        
+        # Switch back to verify bidirectional inference client switching
+        success = Validator.model_switch(
+            self.server.process,
+            "Moondream2-2025-3-27",
+            expected_inference_client="v0.0.1" 
+        )
+        if not success:
+            logging.error("Failed to switch back to model with inference client v0.0.1")
+            all_passed = False
+        
+        logging.debug("Inference client update tests completed")
+        
         return all_passed
 
 def main():
@@ -685,14 +837,14 @@ def main():
     parser = argparse.ArgumentParser(description='Test Moondream Station complete update suite')
     parser.add_argument('--executable', default='./moondream_station', help='Path to executable')
     parser.add_argument('--verbose', action='store_true', help='Print logs to console')
-    parser.add_argument('--debug-trace', action='store_true', help='Enable full debug tracing')
+    parser.add_argument('--debug-trace', action='store_true', help='Enable comprehensive debug tracing')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip manifest cleanup')
     args, server_args = parser.parse_known_args()
     
     setup_logging(verbose=args.verbose, debug_trace=args.debug_trace)
     
     if args.debug_trace:
-        DebugTracer.log("=== DEBUG TRACING ENABLED ===", "SYSTEM")
+        DebugTracer.log("=== COMPREHENSIVE DEBUG TRACING ENABLED ===", "SYSTEM")
         DebugTracer.log(f"Command line args: {vars(args)}", "SYSTEM")
         DebugTracer.log(f"Server args: {server_args}", "SYSTEM")
     
