@@ -12,6 +12,7 @@ done
 
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
+EXTRA_ARGS=("${ARGS[@]:2}")
 
 if $CLEAN; then
     echo "Cleaning output and dev directories..."
@@ -203,7 +204,7 @@ prepare_dev() {
 ##############################################################################
 run_station() {
     cd ..
-    ./output/moondream_station/moondream_station "${@:2}"
+    ./output/moondream_station/moondream_station "@"
 }
 ##############################################################################
 # dispatch
@@ -213,12 +214,9 @@ case "$TYPE" in
     hypervisor)  build_hypervisor  ;;
     cli)         build_cli         ;;
     dev)         prepare_dev       ;;
-    run)         run_station       ;;
+    run)         run_station "${EXTRA_ARGS[@]}" ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run [options]" >&2
-        echo "Options:" >&2
-        echo "  --build-clean           Clean output and dev directories before building" >&2
-        echo "  --manifest-url URL      Set custom manifest URL (overrides default)" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
         exit 1
         ;;
 esac
