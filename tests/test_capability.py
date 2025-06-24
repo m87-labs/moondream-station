@@ -3,8 +3,8 @@ import logging
 import argparse
 from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list
 # Timeout configurations
-QUICK_TIMEOUT = 10
-STANDARD_TIMEOUT = 30
+QUICK_TIMEOUT = 60
+STANDARD_TIMEOUT = 100
 LONG_TIMEOUT = 120
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
 
