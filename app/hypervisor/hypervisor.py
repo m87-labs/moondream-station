@@ -30,10 +30,10 @@ class Hypervisor:
     """
 
     def __init__(
-        self,
+        self, manifest_url: Optional[str] = None
     ):
         self.config = Config()
-        self.manifest = Manifest()
+        self.manifest = Manifest(url=manifest_url)
         self.inferencevisor = InferenceVisor(self.config, self.manifest)
         self.clivisor = CLIVisor(self.config, self.manifest)
 

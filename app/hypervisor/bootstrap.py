@@ -359,7 +359,7 @@ def _unset_sll_cert(signum: int, frame, logger: logging.Logger) -> None:
     sys.exit(128 + signum)
 
 
-def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
+def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger, manifest_url: str = None):
     """Run the hypervisor server in a loop, restarting if needed.
     If exit code 99 is intercepted, update bootstrap. The update subprocess
     will kill and restart bootstrap.
@@ -383,10 +383,13 @@ def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
         if not os.path.isfile(main_py):
             logger.warning(f"'{main_py}' not found.")
             return
+        cmd = [python_bin, main_py]
+        if manifest_url:
+            cmd.extend(["--manifest-url", manifest_url])
 
         logger.info(f"Launching {main_py} via {python_bin}")
 
-        proc = subprocess.Popen([python_bin, main_py])
+        proc = subprocess.Popen(cmd)
         return_code = proc.wait()
         logger.warning(f"{main_py} exited with code {return_code}; restarting in 5s.")
         if return_code != 0:
