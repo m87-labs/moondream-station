@@ -8,6 +8,14 @@ import re
 from pathlib import Path
 from utils import DebugTracer, TracedProcess, setup_trace_logging
 
+# Import capability testing functions
+try:
+    from test_capability import test_model_capabilities, parse_model_list_output
+    CAPABILITY_TESTING_AVAILABLE = True
+except ImportError:
+    CAPABILITY_TESTING_AVAILABLE = False
+    logging.warning("test_capability.py not found - capability testing disabled")
+
 MANIFEST_DIR = "./test_manifests"
 
 class Timeouts:
@@ -62,7 +70,6 @@ def setup_logging(verbose=False, debug_trace=False):
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handler)
     
-    # Add trace logging setup
     setup_trace_logging(debug_trace)
     
     if verbose:
@@ -405,16 +412,12 @@ class Validator:
 
     @staticmethod
     def model_switch(process, model_name, expected_inference_client=None):
-        """Test model switching and verify inference client updates."""
-        
         DebugTracer.log(f"Testing model switch to: {model_name}", "VALIDATOR")
         logging.debug(f"=== Testing Model Switch to {model_name} ===")
         
-        cmd = Commands(process)  # Use your existing Commands class
+        cmd = Commands(process)
         
-        # Get current state before switch  
-        DebugTracer.log("Getting config before model switch", "VALIDATOR")
-        config_before = cmd.get_config()  # Use Commands.get_config()
+        config_before = cmd.get_config()
         parsed_config_before = Parser.parse_config(config_before)
         
         current_model = parsed_config_before.get('active_model', 'unknown')
@@ -423,11 +426,9 @@ class Validator:
         DebugTracer.log(f"Before switch - Model: {current_model}, Inference Client: {current_inference_client}", "VALIDATOR")
         logging.debug(f"Before switch - Model: {current_model}, Inference Client: {current_inference_client}")
         
-        # Execute model switch
         DebugTracer.log(f"Switching to model: {model_name}", "VALIDATOR")
-        output = cmd.model_use(model_name)  # Use Commands.model_use()
+        output = cmd.model_use(model_name)
         
-        # Check for success indicators in output
         if Patterns.MODEL_CHANGE['initialization'] in output:
             DebugTracer.log(f"Model switch command succeeded", "VALIDATOR")
             logging.debug(f"Model switch to {model_name} succeeded")
@@ -436,9 +437,7 @@ class Validator:
             logging.error(f"Model switch to {model_name} failed - success pattern not found")
             return False
         
-        # Get config after switch to verify changes
-        DebugTracer.log("Getting config after model switch", "VALIDATOR")
-        config_after = cmd.get_config()  # Use Commands.get_config()
+        config_after = cmd.get_config()
         parsed_config_after = Parser.parse_config(config_after)
         
         new_model = parsed_config_after.get('active_model', 'unknown')
@@ -447,7 +446,6 @@ class Validator:
         DebugTracer.log(f"After switch - Model: {new_model}, Inference Client: {new_inference_client}", "VALIDATOR")
         logging.debug(f"After switch - Model: {new_model}, Inference Client: {new_inference_client}")
         
-        # Verify active model changed
         if new_model == model_name:
             DebugTracer.log(f"✓ Active model confirmed: {model_name}", "VALIDATOR")
             logging.debug(f"Active model confirmed: {model_name}")
@@ -456,13 +454,11 @@ class Validator:
             logging.error(f"Active model not set to {model_name}, got {new_model}")
             return False
         
-        # Verify inference client if specified
         if expected_inference_client:
             if new_inference_client == expected_inference_client:
                 DebugTracer.log(f"✓ Inference client confirmed: {expected_inference_client}", "VALIDATOR")
                 logging.debug(f"Inference client confirmed: {expected_inference_client}")
                 
-                # Log if inference client actually changed
                 if current_inference_client != new_inference_client:
                     DebugTracer.log(f"✓ Inference client updated: {current_inference_client} → {new_inference_client}", "VALIDATOR")
                     logging.debug(f"Inference client updated: {current_inference_client} → {new_inference_client}")
@@ -657,10 +653,62 @@ class Updater:
                 return False
 
 class TestSuite:
-    def __init__(self, executable='./moondream_station', args=None, cleanup=True):
+    def __init__(self, executable='./moondream_station', args=None, cleanup=True, test_capabilities=False):
         self.server = Server(executable, args)
         self.cleanup = cleanup
+        self.test_capabilities = test_capabilities
         self.updater = None
+    
+    @DebugTracer.log_operation
+    def run_capability_tests(self):
+        if not self.test_capabilities or not CAPABILITY_TESTING_AVAILABLE:
+            return True
+        
+        DebugTracer.log("Starting capability testing", "CAPABILITY")
+        logging.debug("=== Running Capability Tests ===")
+        
+        try:
+            cmd = Commands(self.server.process)
+            
+            # Save current model state before testing
+            config_output = cmd.get_config()
+            current_config = Parser.parse_config(config_output)
+            original_model = current_config.get('active_model', None)
+            
+            DebugTracer.log(f"Original active model: {original_model}", "CAPABILITY")
+            logging.debug(f"Saving original active model: {original_model}")
+            
+            # Get model list and test each one
+            output = cmd.model_list()
+            models = parse_model_list_output(output)
+            
+            DebugTracer.log(f"Testing capabilities for {len(models)} models", "CAPABILITY")
+            logging.debug(f"Found {len(models)} models for capability testing: {models}")
+            
+            for model_name in models:
+                DebugTracer.log(f"Testing capabilities for model: {model_name}", "CAPABILITY")
+                logging.debug(f"--- Testing capabilities for model: {model_name} ---")
+                
+                cmd.model_use(f'"{model_name}"')
+                test_model_capabilities(self.server.process, model_name)
+            
+            # Restore original model if we had one
+            if original_model and original_model in models:
+                DebugTracer.log(f"Restoring original model: {original_model}", "CAPABILITY")
+                logging.debug(f"Restoring original active model: {original_model}")
+                cmd.model_use(f'"{original_model}"')
+            elif original_model:
+                DebugTracer.log(f"Warning: Original model '{original_model}' not found in current model list", "CAPABILITY")
+                logging.warning(f"Could not restore original model '{original_model}' - not in current model list")
+            
+            DebugTracer.log("Capability testing completed", "CAPABILITY")
+            logging.debug("Capability testing completed successfully")
+            return True
+            
+        except Exception as e:
+            DebugTracer.log(f"Capability testing failed: {str(e)}", "CAPABILITY")
+            logging.error(f"Capability testing failed: {e}")
+            return False
     
     def run(self):
         logging.debug("Starting incremental updates test suite")
@@ -700,6 +748,14 @@ class TestSuite:
         })
         all_passed = all_passed and success
         
+        # Capability test after v001 baseline
+        if self.test_capabilities:
+            logging.debug("Running capability tests after v001 baseline")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after v001 baseline")
+                all_passed = False
+        
         Manifest.update_version(2)
         cmd.update_manifest()
         success = Validator.check_updates(self.server.process, "Bootstrap Update Available (v002)", {
@@ -713,6 +769,14 @@ class TestSuite:
         if not success:
             logging.error("Bootstrap update failed")
             all_passed = False
+        
+        # Capability test after v002 bootstrap update
+        if self.test_capabilities:
+            logging.debug("Running capability tests after bootstrap update")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after bootstrap update")
+                all_passed = False
         
         Manifest.update_version(3)
         cmd = Commands(self.server.process)
@@ -729,6 +793,14 @@ class TestSuite:
         if not success:
             logging.error("Hypervisor update failed")
             all_passed = False
+        
+        # Capability test after hypervisor update
+        if self.test_capabilities:
+            logging.debug("Running capability tests after hypervisor update")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after hypervisor update")
+                all_passed = False
         
         cmd = Commands(self.server.process)
         success = Validator.check_updates(self.server.process, "After Hypervisor Update in v003", {
@@ -756,6 +828,14 @@ class TestSuite:
         success = Validator.model_list(self.server.process)
         all_passed = all_passed and success
         
+        # Capability test after model update
+        if self.test_capabilities:
+            logging.debug("Running capability tests after model update")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after model update")
+                all_passed = False
+        
         Manifest.update_version(4)
         cmd = Commands(self.server.process)
         cmd.update_manifest()
@@ -772,6 +852,14 @@ class TestSuite:
             logging.error("CLI update failed")
             all_passed = False
         
+        # Capability test after CLI update
+        if self.test_capabilities:
+            logging.debug("Running capability tests after CLI update")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after CLI update")
+                all_passed = False
+        
         cmd = Commands(self.server.process)
         success = Validator.check_updates(self.server.process, "After CLI Update (v004)", {
             'Bootstrap': Patterns.STATUS_INDICATORS['up_to_date'],
@@ -786,10 +874,8 @@ class TestSuite:
         cmd = Commands(self.server.process)
         cmd.update_manifest()
         
-        # Test inference client updates through model switching
         logging.debug("=== Testing Inference Client Updates (v005) ===")
         
-        # Switch to model requiring inference client v0.0.1
         success = Validator.model_switch(
             self.server.process, 
             "Moondream2-2025-3-27",
@@ -799,7 +885,6 @@ class TestSuite:
             logging.error("Failed to switch to model with inference client v0.0.1")
             all_passed = False
         
-        # Switch to model requiring inference client v0.0.2 (should trigger inference client update)
         success = Validator.model_switch(
             self.server.process,
             "Moondream2-2025-04-14", 
@@ -809,7 +894,6 @@ class TestSuite:
             logging.error("Failed to switch to model with inference client v0.0.2")
             all_passed = False
         
-        # Switch back to verify bidirectional inference client switching
         success = Validator.model_switch(
             self.server.process,
             "Moondream2-2025-3-27",
@@ -821,6 +905,14 @@ class TestSuite:
         
         logging.debug("Inference client update tests completed")
         
+        # Capability test after inference client updates
+        if self.test_capabilities:
+            logging.debug("Running capability tests after inference client updates")
+            success = self.run_capability_tests()
+            if not success:
+                logging.error("Capability tests failed after inference client updates")
+                all_passed = False
+        
         return all_passed
 
 def main():
@@ -829,6 +921,7 @@ def main():
     parser.add_argument('--executable', default='./moondream_station', help='Path to executable')
     parser.add_argument('--verbose', action='store_true', help='Print logs to console')
     parser.add_argument('--debug-trace', action='store_true', help='Enable comprehensive debug tracing')
+    parser.add_argument('--test-capabilities', action='store_true', help='Run capability tests after updates')
     parser.add_argument('--no-cleanup', action='store_true', help='Skip manifest cleanup')
     args, server_args = parser.parse_known_args()
     
@@ -839,7 +932,13 @@ def main():
         DebugTracer.log(f"Command line args: {vars(args)}", "SYSTEM")
         DebugTracer.log(f"Server args: {server_args}", "SYSTEM")
     
-    suite = TestSuite(args.executable, server_args, cleanup=not args.no_cleanup)
+    if args.test_capabilities and not CAPABILITY_TESTING_AVAILABLE:
+        logging.error("Capability testing requested but test_capability.py not available")
+        exit(1)
+    
+    suite = TestSuite(args.executable, server_args, 
+                     cleanup=not args.no_cleanup, 
+                     test_capabilities=args.test_capabilities)
     success = suite.run()
     
     if args.debug_trace:
