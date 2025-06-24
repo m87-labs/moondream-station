@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# Usage: ./build.sh <type> <platform> <version> [--manifest-url URL]
 # Parse args
 CLEAN=false
-MANIFEST_URL=""
 ARGS=()
+MANIFEST_URL=""
 # First pass: extract flags and build clean args array
 while [[ $# -gt 0 ]]; do
     case $1 in
