@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+
 # Parse args
 CLEAN=false
 ARGS=()
@@ -8,6 +9,7 @@ for arg in "$@"; do
         *) ARGS+=("$arg") ;;
     esac
 done
+
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
 
@@ -27,7 +29,9 @@ if $CLEAN; then
         rm -rf "$HOME/.local/share/MoondreamStation"
     fi
 fi
+
 set -euo pipefail
+
 ##############################################################################
 # builders
 ##############################################################################
@@ -38,6 +42,7 @@ build_inference() {
     local BOOTSTRAP="../app/inference_client/bootstrap.py"
     local SRC_DIR="../app/inference_client"
     local FILES=(main.py model_service.py requirements.txt)
+
     local LIBPYTHON
         LIBPYTHON=$(
 python - <<'PY'
@@ -56,11 +61,14 @@ else:
     sys.exit(1)
 PY
 ) || exit 1
+
         # Build a single-file executable and drop libpython next to the bootstrap
         PYI_ARGS="--onefile" 
         #--add-binary ${LIBPYTHON}"
+
     echo "Building 'inference'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
+
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
@@ -69,6 +77,7 @@ PY
         --clean \
         --distpath "$DIST_DIR" \
         "$BOOTSTRAP"
+
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$DIST_DIR"
     done
@@ -76,8 +85,10 @@ PY
     tar -czf "../output/inference_bootstrap.tar.gz" -C "../output" "inference_bootstrap"
     echo "✔ inference → $DIST_DIR"
 }
+
 build_hypervisor() {
     local PYI_ARGS
+
     if [[ "$PLATFORM" = "mac" ]]; then
         # macOS always embeds Python.framework for us
         PYI_ARGS="--windowed"
@@ -101,6 +112,7 @@ else:
     sys.exit(1)
 PY
 ) || exit 1
+
         # Build a single-file executable and drop libpython next to the bootstrap
         PYI_ARGS="--onefile"
         # --add-binary ${LIBPYTHON}"
@@ -108,6 +120,7 @@ PY
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2
         exit 1
     fi
+
     local NAME="moondream_station"
     local DIST_DIR="../output/moondream_station"
     local SUP_DIR="../output/moondream-station-files"
@@ -118,8 +131,10 @@ PY
         manifest.py config.py misc.py update_bootstrap.sh clivisor.py
         display_utils.py
     )
+
     echo "Building 'hypervisor' for $PLATFORM..."
     rm -rf "$DIST_DIR" "$SUP_DIR"; mkdir -p "$DIST_DIR" "$SUP_DIR"
+
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
@@ -127,6 +142,7 @@ PY
         --clean \
         --distpath "$DIST_DIR" \
         "$BOOTSTRAP"
+
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
@@ -134,16 +150,19 @@ PY
     tar -czf "../output/moondream_station_ubuntu.tar.gz" -C "$DIST_DIR" moondream_station
     echo "✔ hypervisor → $DIST_DIR"
 }
+
 build_cli() {
     local NAME="moondream-cli"
     local DIST_DIR="../output/moondream-cli"
     local SRC_DIR="../app/moondream_cli"
+
     echo "Building 'cli'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
     cp -r "$SRC_DIR" "$DIST_DIR/"
     tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
     echo "✔ cli → $DIST_DIR"
 }
+
 ##############################################################################
 # dev sandbox
 ##############################################################################
