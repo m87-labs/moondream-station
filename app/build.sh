@@ -291,7 +291,7 @@ prepare_dev() {
     cp -r "../output/moondream-cli/moondream_cli" "$DEV_DIR/"
 
     # copy inference build
-    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/$INFERENCE_VERSION/"
+    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
     
     if [ -n "$VERSION" ]; then
         echo "✔ dev sandbox ready → $DEV_DIR (${VERSION})"
