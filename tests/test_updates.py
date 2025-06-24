@@ -1,3 +1,26 @@
+"""
+Moondream Station Update Testing Suite
+
+This suite tests incremental updates across multiple manifest versions.
+
+Expected Manifest File Structure:
+Each manifest_v00X.json should contain:
+{
+    "bootstrap_version": "v0.0.X",
+    "hypervisor_version": "v0.0.X", 
+    "cli_version": "v0.0.X",
+    "inference_client_version": "v0.0.X",
+    "models": {
+        "ModelName": {
+            "release_date": "2025-XX-XX",
+            "size": "2B",
+            "notes": "Description",
+            "inference_client_version": "v0.0.X"  // Required for inference client testing
+        }
+    }
+}
+"""
+
 import pexpect
 import shutil
 import os
@@ -54,6 +77,22 @@ class Patterns:
     MODEL_CHANGE = {
         'success': r'Model successfully changed to',
         'initialization': r'Model initialization completed successfully'
+    }
+    
+    VERSION_PATTERNS = {
+        'check_updates': {
+            'bootstrap': r'Bootstrap:\s+(v\d+\.\d+\.\d+)\s+-\s+(.+)',
+            'hypervisor': r'Hypervisor:\s+(v\d+\.\d+\.\d+)\s+-\s+(.+)',
+            'cli': r'CLI:\s+(v\d+\.\d+\.\d+)\s+-\s+(.+)',
+            'model': r'Model:\s+([^-]+)\s+-\s+(.+)'
+        },
+        'get_config': {
+            'bootstrap': r'active_bootstrap:\s+(v\d+\.\d+\.\d+)',
+            'hypervisor': r'active_hypervisor:\s+(v\d+\.\d+\.\d+)',
+            'cli': r'active_cli:\s+(v\d+\.\d+\.\d+)',
+            'inference_client': r'active_inference_client:\s+(v\d+\.\d+\.\d+)',
+            'model': r'active_model:\s+(.+)'
+        }
     }
 
 class Config:
@@ -179,6 +218,34 @@ class Manifest:
         
         DebugTracer.log("Test environment verification completed", "MANIFEST")
         logging.debug("Test environment verified")
+    
+    @staticmethod
+    def get_expected_versions(version):
+        import json
+        version_file = Path(MANIFEST_DIR) / f"manifest_v{version:03d}.json"
+        if not version_file.exists():
+            logging.warning(f"Manifest file {version_file} not found")
+            return {}
+        
+        try:
+            with open(version_file, 'r') as f:
+                manifest_data = json.load(f)
+            
+            expected = {
+                'bootstrap': manifest_data.get('bootstrap_version'),
+                'hypervisor': manifest_data.get('hypervisor_version'),
+                'cli': manifest_data.get('cli_version'),
+                'inference_client': manifest_data.get('inference_client_version'),
+                'models': manifest_data.get('models', {})
+            }
+            
+            DebugTracer.log(f"Expected versions from v{version:03d}: {expected}", "MANIFEST")
+            logging.debug(f"Expected versions from manifest v{version:03d}: {expected}")
+            return expected
+            
+        except Exception as e:
+            logging.error(f"Failed to read expected versions from {version_file}: {e}")
+            return {}
 
 class Commands:
     def __init__(self, process):
@@ -276,6 +343,37 @@ class Parser:
         
         logging.debug(f"Parsed components: {components}")
         return components
+    
+    @staticmethod
+    def parse_versions_from_check_updates(output):
+        versions = {}
+        for line in output.split('\n'):
+            line = line.strip()
+            for component, pattern in Patterns.VERSION_PATTERNS['check_updates'].items():
+                match = re.search(pattern, line)
+                if match:
+                    if component == 'model':
+                        versions[component] = match.group(1).strip()
+                    else:
+                        versions[component] = match.group(1)
+                    break
+        
+        logging.debug(f"Parsed versions from check-updates: {versions}")
+        return versions
+    
+    @staticmethod
+    def parse_versions_from_config(output):
+        versions = {}
+        for line in output.split('\n'):
+            line = line.strip()
+            for component, pattern in Patterns.VERSION_PATTERNS['get_config'].items():
+                match = re.search(pattern, line)
+                if match:
+                    versions[component] = match.group(1).strip()
+                    break
+        
+        logging.debug(f"Parsed versions from get-config: {versions}")
+        return versions
     
     @staticmethod
     def parse_models(output):
@@ -411,7 +509,116 @@ class Validator:
         return all_valid
 
     @staticmethod
-    def model_switch(process, model_name, expected_inference_client=None):
+    @DebugTracer.log_operation
+    def test_inference_client_switches(process, manifest_version):
+        """Test inference client switches based on manifest expectations."""
+        DebugTracer.log(f"Testing inference client switches for v{manifest_version:03d}", "VALIDATOR")
+        logging.debug(f"=== Testing Inference Client Switches (v{manifest_version:03d}) ===")
+        
+        # Get expected model → inference client mapping from manifest
+        expected = Manifest.get_expected_versions(manifest_version)
+        models_config = expected.get('models', {})
+        
+        if not models_config:
+            DebugTracer.log("No model configuration found in manifest", "VALIDATOR")
+            logging.warning("No model configuration found in manifest")
+            return True
+        
+        # Filter models that have inference client version specified
+        models_to_test = {}
+        for model_name, model_config in models_config.items():
+            if isinstance(model_config, dict) and 'inference_client_version' in model_config:
+                models_to_test[model_name] = model_config['inference_client_version']
+        
+        if not models_to_test:
+            DebugTracer.log("No models with inference client versions found in manifest", "VALIDATOR")
+            logging.warning("No models with inference client versions found in manifest")
+            return True
+        
+        DebugTracer.log(f"Found {len(models_to_test)} models to test: {models_to_test}", "VALIDATOR")
+        logging.debug(f"Testing inference client switches for models: {models_to_test}")
+        
+        all_passed = True
+        for model_name, expected_inference_client in models_to_test.items():
+            DebugTracer.log(f"Testing model {model_name} → inference client {expected_inference_client}", "VALIDATOR")
+            logging.debug(f"Testing model {model_name} with expected inference client {expected_inference_client}")
+            
+            success = Validator.model_switch(
+                process, 
+                model_name,
+                expected_inference_client=expected_inference_client
+            )
+            
+            if not success:
+                DebugTracer.log(f"Failed to switch to model {model_name} with inference client {expected_inference_client}", "VALIDATOR")
+                logging.error(f"Failed to switch to model {model_name} with inference client {expected_inference_client}")
+                all_passed = False
+        
+        DebugTracer.log(f"Inference client switches result: {'PASS' if all_passed else 'FAIL'}", "VALIDATOR")
+        logging.debug(f"Inference client switches: {'PASS' if all_passed else 'FAIL'}")
+        return all_passed
+
+    @staticmethod
+    @DebugTracer.log_operation
+    def validate_versions(process, manifest_version, components_to_check=None):
+        """Validate component versions against expected versions from manifest."""
+        DebugTracer.log(f"Validating versions for manifest v{manifest_version:03d}", "VALIDATOR")
+        logging.debug(f"=== Validating Versions (v{manifest_version:03d}) ===")
+        
+        # Get expected versions from manifest
+        expected = Manifest.get_expected_versions(manifest_version)
+        if not expected:
+            DebugTracer.log("No expected versions found - skipping validation", "VALIDATOR")
+            logging.warning("No expected versions found - skipping version validation")
+            return True
+        
+        cmd = Commands(process)
+        
+        # Get actual versions from server
+        check_updates_output = cmd.check_updates()
+        actual_versions = Parser.parse_versions_from_check_updates(check_updates_output)
+        
+        # Also get config for inference client version
+        config_output = cmd.get_config()
+        config_versions = Parser.parse_versions_from_config(config_output)
+        
+        # Merge version info
+        actual_versions.update(config_versions)
+        
+        DebugTracer.log(f"Expected versions: {expected}", "VALIDATOR")
+        DebugTracer.log(f"Actual versions: {actual_versions}", "VALIDATOR")
+        
+        # Default to checking all components if none specified
+        if components_to_check is None:
+            components_to_check = ['bootstrap', 'hypervisor', 'cli', 'inference_client']
+        
+        all_valid = True
+        for component in components_to_check:
+            expected_version = expected.get(component)
+            actual_version = actual_versions.get(component)
+            
+            if expected_version is None:
+                DebugTracer.log(f"⚪ {component}: no expected version in manifest", "VALIDATOR")
+                logging.debug(f"{component}: no expected version specified")
+                continue
+                
+            if actual_version is None:
+                DebugTracer.log(f"❓ {component}: version not found in server output", "VALIDATOR")
+                logging.warning(f"{component}: version not found in server output")
+                all_valid = False
+                continue
+            
+            if actual_version == expected_version:
+                DebugTracer.log(f"✓ {component}: {actual_version} (matches expected)", "VALIDATOR")
+                logging.debug(f"{component}: {actual_version} ✓")
+            else:
+                DebugTracer.log(f"✗ {component}: got '{actual_version}', expected '{expected_version}'", "VALIDATOR")
+                logging.error(f"{component}: got '{actual_version}', expected '{expected_version}'")
+                all_valid = False
+        
+        DebugTracer.log(f"Version validation result: {'PASS' if all_valid else 'FAIL'}", "VALIDATOR")
+        logging.debug(f"Version validation: {'PASS' if all_valid else 'FAIL'}")
+        return all_valid
         DebugTracer.log(f"Testing model switch to: {model_name}", "VALIDATOR")
         logging.debug(f"=== Testing Model Switch to {model_name} ===")
         
@@ -748,6 +955,12 @@ class TestSuite:
         })
         all_passed = all_passed and success
         
+        # Validate versions for v001 baseline
+        success = Validator.validate_versions(self.server.process, 1)
+        if not success:
+            logging.error("Version validation failed for v001 baseline")
+            all_passed = False
+        
         # Capability test after v001 baseline
         if self.test_capabilities:
             logging.debug("Running capability tests after v001 baseline")
@@ -768,6 +981,12 @@ class TestSuite:
         success = self.updater.bootstrap()
         if not success:
             logging.error("Bootstrap update failed")
+            all_passed = False
+        
+        # Validate bootstrap version after update
+        success = Validator.validate_versions(self.server.process, 2, ['bootstrap'])
+        if not success:
+            logging.error("Bootstrap version validation failed after update")
             all_passed = False
         
         # Capability test after v002 bootstrap update
@@ -792,6 +1011,12 @@ class TestSuite:
         success = self.updater.hypervisor()
         if not success:
             logging.error("Hypervisor update failed")
+            all_passed = False
+        
+        # Validate hypervisor version after update
+        success = Validator.validate_versions(self.server.process, 3, ['hypervisor'])
+        if not success:
+            logging.error("Hypervisor version validation failed after update")
             all_passed = False
         
         # Capability test after hypervisor update
@@ -828,6 +1053,12 @@ class TestSuite:
         success = Validator.model_list(self.server.process)
         all_passed = all_passed and success
         
+        # Validate all versions after model update (v003 should have new models)
+        success = Validator.validate_versions(self.server.process, 3)
+        if not success:
+            logging.error("Version validation failed after model update")
+            all_passed = False
+        
         # Capability test after model update
         if self.test_capabilities:
             logging.debug("Running capability tests after model update")
@@ -850,6 +1081,21 @@ class TestSuite:
         success = self.updater.full('admin update --confirm', "cli")
         if not success:
             logging.error("CLI update failed")
+            all_passed = False
+        
+        cmd = Commands(self.server.process)
+        success = Validator.check_updates(self.server.process, "After CLI Update (v004)", {
+            'Bootstrap': Patterns.STATUS_INDICATORS['up_to_date'],
+            'Hypervisor': Patterns.STATUS_INDICATORS['up_to_date'],
+            'CLI': Patterns.STATUS_INDICATORS['up_to_date'],
+            'Model': Patterns.STATUS_INDICATORS['up_to_date']
+        })
+        all_passed = all_passed and success
+        
+        # Validate CLI version after update
+        success = Validator.validate_versions(self.server.process, 4, ['cli'])
+        if not success:
+            logging.error("CLI version validation failed after update")
             all_passed = False
         
         # Capability test after CLI update
@@ -876,34 +1122,19 @@ class TestSuite:
         
         logging.debug("=== Testing Inference Client Updates (v005) ===")
         
-        success = Validator.model_switch(
-            self.server.process, 
-            "Moondream2-2025-3-27",
-            expected_inference_client="v0.0.1"
-        )
+        # Test inference client switches based on manifest configuration
+        success = Validator.test_inference_client_switches(self.server.process, 5)
         if not success:
-            logging.error("Failed to switch to model with inference client v0.0.1")
-            all_passed = False
-        
-        success = Validator.model_switch(
-            self.server.process,
-            "Moondream2-2025-04-14", 
-            expected_inference_client="v0.0.2"
-        )
-        if not success:
-            logging.error("Failed to switch to model with inference client v0.0.2")
-            all_passed = False
-        
-        success = Validator.model_switch(
-            self.server.process,
-            "Moondream2-2025-3-27",
-            expected_inference_client="v0.0.1" 
-        )
-        if not success:
-            logging.error("Failed to switch back to model with inference client v0.0.1")
+            logging.error("Inference client switches failed")
             all_passed = False
         
         logging.debug("Inference client update tests completed")
+        
+        # Validate inference client versions after all switches
+        success = Validator.validate_versions(self.server.process, 5, ['inference_client'])
+        if not success:
+            logging.error("Inference client version validation failed")
+            all_passed = False
         
         # Capability test after inference client updates
         if self.test_capabilities:
