@@ -465,6 +465,7 @@ def main():
 
     logger.info(f"Starting hypervisor server on port: {args.port}")
     logger.info(f"Using inference server at: {args.inference_url}")
+    logger.info(f"Parsed manifest URL from args: {args.manifest_url}")
 
     print(f"Moondream Station is running on http://localhost:{args.port}/v1")
 
