@@ -203,7 +203,7 @@ prepare_dev() {
 ##############################################################################
 run_station() {
     cd ..
-    ./output/moondream_station/moondream_station "$@"
+    ./output/moondream_station/moondream_station "${@:2}"
 }
 ##############################################################################
 # dispatch
@@ -213,7 +213,7 @@ case "$TYPE" in
     hypervisor)  build_hypervisor  ;;
     cli)         build_cli         ;;
     dev)         prepare_dev       ;;
-    run)         run_station "$@"  ;;
+    run)         run_station       ;;
     *)
         echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run [options]" >&2
         echo "Options:" >&2
