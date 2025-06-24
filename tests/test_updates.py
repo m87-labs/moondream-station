@@ -8,15 +8,6 @@ import re
 from pathlib import Path
 from utils import DebugTracer, TracedProcess, setup_trace_logging
 
-import pexpect
-import shutil
-import os
-import logging
-import time
-import requests
-import re
-from pathlib import Path
-
 MANIFEST_DIR = "./test_manifests"
 
 class Timeouts:
