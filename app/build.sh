@@ -26,9 +26,6 @@ fi
 
 set -euo pipefail
 
-TYPE=${1:-}            # inference | hypervisor | cli | dev
-PLATFORM=${2:-ubuntu}  # mac | ubuntu  (default ubuntu)
-
 ##############################################################################
 # builders
 ##############################################################################
@@ -204,7 +201,7 @@ prepare_dev() {
 ##############################################################################
 run_station() {
     cd ..
-    ./output/moondream_station/moondream_station "@"
+    ./output/moondream_station/moondream_station "$@"
 }
 ##############################################################################
 # dispatch
