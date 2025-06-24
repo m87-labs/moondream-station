@@ -3,19 +3,12 @@
 # Parse args
 CLEAN=false
 ARGS=()
-MANIFEST_URL=""
 for arg in "$@"; do
     case $arg in
         --build-clean) CLEAN=true ;;
-        --manifest-url=*) MANIFEST_URL="${arg#*=}" ;;
         *) ARGS+=("$arg") ;;
     esac
 done
-
-if [[ -n "$MANIFEST_URL" ]]; then
-    export MANIFEST_URL
-    echo "Setting MANIFEST_URL environment variable: $MANIFEST_URL"
-fi
 
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
@@ -210,7 +203,7 @@ prepare_dev() {
 ##############################################################################
 run_station() {
     cd ..
-    ./output/moondream_station/moondream_station
+    ./output/moondream_station/moondream_station "$@"
 }
 ##############################################################################
 # dispatch

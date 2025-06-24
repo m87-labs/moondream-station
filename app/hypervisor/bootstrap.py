@@ -750,7 +750,7 @@ def is_setup(app_dir: str) -> bool:
     return True
 
 
-def main(verbose: bool = False):
+def main(verbose: bool = False, manifest_url: str = None):
     """Entry point for Moondream Station.
 
     Handles setup of Python environment, downloads necessary components,
@@ -819,7 +819,7 @@ def main(verbose: bool = False):
     elapsed_time = time.time() - start_time
     logger.info(f"Bootup completed in {elapsed_time:.2f} seconds")
 
-    run_main_loop(venv_dir, app_dir, logger)
+    run_main_loop(venv_dir, app_dir, logger, manifest_url=manifest_url)
 
 
 if __name__ == "__main__":
@@ -832,6 +832,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Print detailed information to stdout",
     )
+    parser.add_argument(
+    "--manifest-url",
+    type=str,
+    help="Custom manifest URL"
+    )
     args = parser.parse_args()
 
-    main(verbose=args.verbose)
+    main(verbose=args.verbose, manifest_url=args.manifest_url)

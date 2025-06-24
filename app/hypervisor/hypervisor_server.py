@@ -450,11 +450,11 @@ def main():
         default="http://localhost:20200/v1",
         help="URL of the inference server",
     )
-    DEFAULT_MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
+    
     parser.add_argument(
     "--manifest-url",
     type=str,
-    default=os.environ.get("MANIFEST_URL", DEFAULT_MANIFEST_URL),
+    default="https://depot.moondream.ai/station/md_station_manifest_ubuntu.json",
     help="Custom manifest URL (defaults to Moondream's official manifest)"
     )
 
