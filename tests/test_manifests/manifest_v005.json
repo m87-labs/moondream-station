@@ -55,8 +55,12 @@
     },
     "inference_clients": {
         "v0.0.2": {
-            "date": "2025-03-27",
+            "date": "2025-03-28",
             "url": "http://localhost:8080/inference_bootstrap_v002.tar.gz"
+        },
+        "v0.0.1": {
+            "date": "2025-03-27",
+            "url": "http://localhost:8080/inference_bootstrap_v001.tar.gz"
         }
     },
     "notes": [
