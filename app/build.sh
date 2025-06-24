@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Usage: ./build.sh <type> <platform> <version> [--manifest-url URL]
-# Parse args more carefully
+# Parse args
 CLEAN=false
 MANIFEST_URL=""
 ARGS=()
@@ -71,7 +71,8 @@ restore_version_strings() {
     # Restore from .bak files
     find ../app -name "*.bak" -exec sh -c 'mv "$1" "${1%.bak}"' _ {} \;
 }
-# Set up cleanup trap
+
+# Cleanup trap to restore version strings if the script exits unexpectedly
 trap restore_version_strings EXIT
 if $CLEAN; then
     echo "Cleaning output and dev directories..."
