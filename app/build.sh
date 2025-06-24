@@ -274,8 +274,7 @@ prepare_dev() {
     fi
     
     # Use version for directory structure or default to v0.0.1 if no version specified
-    local INFERENCE_VERSION="${VERSION:-v0.0.1}"
-    mkdir -p "$DEV_DIR/inference/$INFERENCE_VERSION"
+    mkdir -p "$DEV_DIR/inference/v0.0.1"
     
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
