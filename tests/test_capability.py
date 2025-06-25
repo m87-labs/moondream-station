@@ -10,7 +10,7 @@ STANDARD_TIMEOUT = 100
 LONG_TIMEOUT = 120
 KEYWORD_THRESHOLD = 0.7
 
-# URL Constants
+# URL Default Constants
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
 
 DEFAULT_MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
@@ -34,6 +34,13 @@ def setup_logging(verbose=False):
 
 @contextmanager
 def server_session(executable_path='./moondream_station', args=None):
+    """
+    Context manager to start and stop the Moondream Station CLI.
+    This spawns the CLI process, performs a health check,
+    and yields the child process for further interaction.
+    After the block, it sends an exit command and cleans up the process.
+    If the process is still alive after sending 'exit', it is forcefully closed.
+    """
     cmd = [executable_path] + (args or [])
     child = pexpect.spawn(' '.join(cmd))
     logging.debug(f"Starting up Moondream Station with command: {' '.join(cmd)}")
@@ -52,6 +59,16 @@ def server_session(executable_path='./moondream_station', args=None):
         child.isalive() and child.close(force=True)
 
 def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT):
+    """
+    Test a specific capability of the Moondream Station CLI.
+    This works by sending a command to the CLI, waiting for the response,
+    and then validating the output against expected values.
+    It passes if the output matches the expected response,
+    and if the length of the response is within expected ranges for captions.
+    If the command is a caption command, it also checks the length of the caption.
+    If the command is a caption or query, it checks for keyword presence.
+    If the command is a point or detect command, it checks for exact match for coordinates.
+    """
     logging.debug(f"Testing: {command}")
     child.sendline(command)
     
@@ -95,6 +112,14 @@ def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT)
     return content_valid and length_valid, cleaned
 
 def test_model_capabilities(child, model_name):
+    """
+    Test the capabilities of a specific model by running predefined commands
+    and comparing the outputs against expected responses.
+    This function retrieves expected responses for the model from a JSON file,
+    constructs commands for various capabilities (captioning, querying, face detection),
+    and executes them in the Moondream Station CLI using test_capability.
+    It logs the results of each test and summarizes the overall success rate.
+    """
     expected_responses = load_expected_responses()
     if model_name not in expected_responses:
         logging.error(f"No expected responses found for model: {model_name}")
@@ -126,6 +151,13 @@ def test_model_capabilities(child, model_name):
     logging.debug(f"Model capability tests: {passed}/{total} passed for {model_name}")
 
 def test_all_models(child, manifest_url=None):
+    """
+    Test all models available in the Moondream Station CLI.
+    This function retrieves the list of models, iterates through each model,
+    switches to the model using 'admin model-use', and tests its capabilities.
+    It validates the model list against a manifest URL if provided,
+    and logs the results of each model's capabilities tests.
+    """
     child.sendline('admin model-list')
     child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     model_list_output = child.before.decode()
@@ -160,7 +192,6 @@ def test_server(cleanup=False, executable_path='./moondream_station', server_arg
         server_args = (server_args or []) + ['--manifest-url', manifest_url]
     
     with server_session(executable_path, server_args) as child:
-        # Only validate if not skipped
         validation_url = None if skip_validation else manifest_url
         test_all_models(child, validation_url)
 
