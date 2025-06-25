@@ -65,26 +65,22 @@ def parse_model_list(output):
     
     return models
 
-def validate_model_list(model_list_output):
-    manifest_path = os.path.expanduser("~/.local/share/MoondreamStation/manifest.py")
-    if not os.path.exists(manifest_path):
-        logging.warning("manifest.py not found - skipping model list validation")
-        return
-    
-    with open(manifest_path, 'r') as f:
-        manifest_content = f.read()
-    
-    url_match = re.search(r'MANIFEST_URL\s*=\s*["\']([^"\']+)["\']', manifest_content)
-    if not url_match:
-        logging.warning("MANIFEST_URL not found in manifest.py - skipping validation")
-        return
-    
+def validate_model_list(model_list_output, manifest_url):
     try:
-        response = requests.get(url_match.group(1), timeout=10)
-        manifest_data = response.json()
-        logging.debug(f"Fetched manifest from: {url_match.group(1)}")
+        if manifest_url.startswith(('http://', 'https://')):
+            manifest_data = requests.get(manifest_url, timeout=10).json()
+            logging.debug(f"Fetched manifest from: {manifest_url}")
+        elif manifest_url.startswith('file://'):
+            path = manifest_url[7:]  # Remove 'file://' prefix
+            with open(os.path.expanduser(path), 'r') as f:
+                manifest_data = json.load(f)
+            logging.debug(f"Loaded manifest from file URL: {manifest_url}")
+        else:
+            with open(os.path.expanduser(manifest_url), 'r') as f:
+                manifest_data = json.load(f)
+            logging.debug(f"Loaded manifest from local file: {manifest_url}")
     except Exception as e:
-        logging.warning(f"Failed to fetch manifest: {e}")
+        logging.warning(f"Manifest validation skipped: {e}")
         return
     
     cli_models = parse_model_list(model_list_output)
@@ -92,31 +88,31 @@ def validate_model_list(model_list_output):
     
     logging.debug("--- Model List Validation ---")
     
+    # Check all models match
     all_valid = True
-    for model_name, cli_data in cli_models.items():
-        if model_name in manifest_models:
-            manifest_model = manifest_models[model_name]
-            matches = {
-                'release_date': cli_data.get('release_date') == manifest_model.get('release_date'),
-                'model_size': cli_data.get('model_size') == manifest_model.get('model_size'),
-                'notes': cli_data.get('notes') == manifest_model.get('notes')
-            }
+    for name, cli_data in cli_models.items():
+        if name not in manifest_models:
+            logging.warning(f"Model '{name}' found in CLI but not in manifest")
+            all_valid = False
+            continue
             
-            model_valid = all(matches.values())
-            all_valid = all_valid and model_valid
-            logging.debug(f"Model '{model_name}': {'PASS' if model_valid else 'FAIL'}")
-            
-            if not model_valid:
-                for field, match in matches.items():
-                    if not match:
-                        logging.debug(f"  {field}: expected '{manifest_model.get(field)}', got '{cli_data.get(field)}'")
+        # Compare fields
+        manifest_model = manifest_models[name]
+        mismatches = [field for field in ['release_date', 'model_size', 'notes']
+                      if cli_data.get(field) != manifest_model.get(field)]
+        
+        if mismatches:
+            all_valid = False
+            logging.debug(f"Model '{name}': FAIL")
+            for field in mismatches:
+                logging.debug(f"  {field}: expected '{manifest_model.get(field)}', got '{cli_data.get(field)}'")
         else:
-            logging.warning(f"Model '{model_name}' found in CLI but not in manifest")
-            all_valid = False
+            logging.debug(f"Model '{name}': PASS")
     
-    for model_name in manifest_models:
-        if model_name not in cli_models:
-            logging.warning(f"Model '{model_name}' in manifest but not in CLI output")
-            all_valid = False
+    # Check for missing models
+    missing = set(manifest_models) - set(cli_models)
+    for name in missing:
+        logging.warning(f"Model '{name}' in manifest but not in CLI output")
+        all_valid = False
     
     logging.debug(f"Model list validation: {'PASS' if all_valid else 'FAIL'}")
