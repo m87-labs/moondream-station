@@ -32,47 +32,27 @@ def load_expected_responses(json_path="expected_responses.json"):
 def clean_response_output(output, command_type):
     lines = [line.strip() for line in output.split('\n') if line.strip()]
     
-    if command_type == 'caption':
-        caption_lines = []
-        for line in lines:
-            if (not line.startswith('caption ') and 
-                'Generating' not in line and
-                '------ Completed ------' not in line and
-                'moondream>' not in line):
-                caption_lines.append(line)
-        
-        return max(caption_lines, key=len) if caption_lines else output.strip()
-    
-    elif command_type == 'query':
-        query_lines = []
-        for line in lines:
-            if (not line.startswith('query ') and
-                'Answering streaming query' not in line and
-                '------ Completed ------' not in line and
-                'moondream>' not in line):
-                query_lines.append(line)
-        
-        return max(query_lines, key=len) if query_lines else output.strip()
+    if command_type in ['caption', 'query']:
+
+        filtered = [line for line in lines 
+                   if not line.startswith(f'{command_type} ') 
+                   and 'Generating' not in line
+                   and 'Answering streaming query' not in line
+                   and '------ Completed ------' not in line
+                   and 'moondream>' not in line]
+        return max(filtered, key=len) if filtered else output.strip()
     
     elif command_type == 'detect':
         if any('No' in line and 'detected' in line for line in lines):
             return "No face objects detected"
-        
-        for line in lines:
-            match = re.search(r"Position: (\{[^}]+\})", line)
-            if match:
-                return match.group(1)
-        return output.strip()
+        match = re.search(r"Position: (\{[^}]+\})", output)
+        return match.group(1) if match else output.strip()
     
     elif command_type == 'point':
-        for line in lines:
-            match = re.search(r"(\{'x': [^}]+\})", line)
-            if match:
-                return match.group(1)
-        return output.strip()
+        match = re.search(r"(\{'x': [^}]+\})", output)
+        return match.group(1) if match else output.strip()
     
-    else:
-        return output.strip()
+    return output.strip()
 
 def parse_model_list(output):
     models = {}
