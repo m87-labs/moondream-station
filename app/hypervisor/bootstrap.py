@@ -359,7 +359,7 @@ def _unset_sll_cert(signum: int, frame, logger: logging.Logger) -> None:
     sys.exit(128 + signum)
 
 
-def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
+def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger, manifest_url: str = None):
     """Run the hypervisor server in a loop, restarting if needed.
     If exit code 99 is intercepted, update bootstrap. The update subprocess
     will kill and restart bootstrap.
@@ -383,10 +383,14 @@ def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
         if not os.path.isfile(main_py):
             logger.warning(f"'{main_py}' not found.")
             return
+        cmd = [python_bin, main_py]
+        if manifest_url:
+            cmd.extend(["--manifest-url", manifest_url])
 
         logger.info(f"Launching {main_py} via {python_bin}")
+        logger.info(f"Command to execute: {' '.join(cmd)}")
 
-        proc = subprocess.Popen([python_bin, main_py])
+        proc = subprocess.Popen(cmd)
         return_code = proc.wait()
         logger.warning(f"{main_py} exited with code {return_code}; restarting in 5s.")
         if return_code != 0:
@@ -747,7 +751,7 @@ def is_setup(app_dir: str) -> bool:
     return True
 
 
-def main(verbose: bool = False):
+def main(verbose: bool = False, manifest_url: str = None):
     """Entry point for Moondream Station.
 
     Handles setup of Python environment, downloads necessary components,
@@ -816,7 +820,9 @@ def main(verbose: bool = False):
     elapsed_time = time.time() - start_time
     logger.info(f"Bootup completed in {elapsed_time:.2f} seconds")
 
-    run_main_loop(venv_dir, app_dir, logger)
+    logger.info(f"Main function manifest_url: {manifest_url}")
+    run_main_loop(venv_dir, app_dir, logger, manifest_url=manifest_url)
+    
 
 
 if __name__ == "__main__":
@@ -829,6 +835,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Print detailed information to stdout",
     )
+    parser.add_argument(
+    "--manifest-url",
+    type=str,
+    help="Custom manifest URL"
+    )
     args = parser.parse_args()
 
-    main(verbose=args.verbose)
+    main(verbose=args.verbose, manifest_url=args.manifest_url)

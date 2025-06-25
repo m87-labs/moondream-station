@@ -13,6 +13,13 @@ done
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
 
+# Special handling for 'run' command
+if [[ "$TYPE" == "run" ]]; then
+    EXTRA_ARGS=("${ARGS[@]:1}")
+else
+    EXTRA_ARGS=("${ARGS[@]:2}")
+fi
+
 if $CLEAN; then
     echo "Cleaning output and dev directories..."
     rm -rf ../output
@@ -24,9 +31,6 @@ if $CLEAN; then
 fi
 
 set -euo pipefail
-
-TYPE=${1:-}            # inference | hypervisor | cli | dev
-PLATFORM=${2:-ubuntu}  # mac | ubuntu  (default ubuntu)
 
 ##############################################################################
 # builders
@@ -203,7 +207,7 @@ prepare_dev() {
 ##############################################################################
 run_station() {
     cd ..
-    ./output/moondream_station/moondream_station
+    ./output/moondream_station/moondream_station "$@"
 }
 ##############################################################################
 # dispatch
@@ -213,7 +217,7 @@ case "$TYPE" in
     hypervisor)  build_hypervisor  ;;
     cli)         build_cli         ;;
     dev)         prepare_dev       ;;
-    run)         run_station       ;;
+    run)         run_station "${EXTRA_ARGS[@]}" ;;
     *)
         echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
         exit 1

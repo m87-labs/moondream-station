@@ -55,7 +55,7 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 async def lifespan(app: FastAPI):
     # Initialize the hypervisor
-    app.state.hypervisor = Hypervisor()
+    app.state.hypervisor = Hypervisor(manifest_url=app.state.manifest_url)
     app.state.hypervisor.boot()
     logger.info("Moondream Hypervisor server initialized and ready")
     yield
@@ -450,12 +450,22 @@ def main():
         default="http://localhost:20200/v1",
         help="URL of the inference server",
     )
+    
+    parser.add_argument(
+    "--manifest-url",
+    type=str,
+    default="https://depot.moondream.ai/station/md_station_manifest_ubuntu.json",
+    help="Custom manifest URL (defaults to Moondream's official manifest)"
+    )
+
     args = parser.parse_args()
 
     app.state.inference_url = args.inference_url
+    app.state.manifest_url = args.manifest_url 
 
     logger.info(f"Starting hypervisor server on port: {args.port}")
     logger.info(f"Using inference server at: {args.inference_url}")
+    logger.info(f"Parsed manifest URL from args: {args.manifest_url}")
 
     print(f"Moondream Station is running on http://localhost:{args.port}/v1")
 
