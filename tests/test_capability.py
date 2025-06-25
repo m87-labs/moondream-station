@@ -8,6 +8,7 @@ from utils import clean_files, load_expected_responses, clean_response_output, v
 QUICK_TIMEOUT = 60
 STANDARD_TIMEOUT = 100
 LONG_TIMEOUT = 120
+KEYWORD_THRESHOLD = 0.7
 
 # URL Constants
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
@@ -82,8 +83,9 @@ def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT)
     if cmd_type in ['caption', 'query']:
         keywords = expected_response.get('keywords', [])
         matches = sum(kw.lower() in cleaned.lower() for kw in keywords)
-        content_valid = matches >= len(keywords) * 0.7
-        logging.debug(f"Keywords: {matches}/{len(keywords)} ({'PASS' if content_valid else 'FAIL'})")
+        content_valid = matches >= len(keywords) * KEYWORD_THRESHOLD
+        logging.debug(f"Keywords: {matches}/{len(keywords)} (threshold: {KEYWORD_THRESHOLD}) "
+                     f"({'PASS' if content_valid else 'FAIL'})")
     else:
         content_valid = cleaned == expected_response
         logging.debug(f"Exact match: {'PASS' if content_valid else 'FAIL'}")
@@ -149,7 +151,7 @@ def test_all_models(child, manifest_url=None):
         except Exception as e:
             logging.warning(f"Model switch to '{model_name}' failed: {e}")
 
-def test_server(cleanup=True, executable_path='./moondream_station', server_args=None, 
+def test_server(cleanup=False, executable_path='./moondream_station', server_args=None, 
                 manifest_url=None, skip_validation=False):
     if cleanup:
         clean_files()
@@ -165,8 +167,10 @@ def test_server(cleanup=True, executable_path='./moondream_station', server_args
 def main():
     parser = argparse.ArgumentParser(description='Test Moondream Station startup',
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup before test')
+    parser.add_argument('--cleanup', action='store_true', help='Cleanup before test')
     parser.add_argument('--executable', default='./moondream_station', help='Path to moondream_station executable')
+    parser.add_argument('--keyword-threshold', type=float, default=0.7,
+                    help='Minimum fraction of keywords required (0.0-1.0, default: 0.7)')
     parser.add_argument('--verbose', action='store_true', help='Print log messages to console')
     parser.add_argument('--manifest-url', default=DEFAULT_MANIFEST_URL,
                         help='URL or local path to manifest.json - passed to executable and used for validation')
@@ -174,14 +178,16 @@ def main():
                         help='Skip manifest validation (URL still passed to executable)')
     
     args, server_args = parser.parse_known_args()
+    global KEYWORD_THRESHOLD
+    KEYWORD_THRESHOLD = args.keyword_threshold
     
     setup_logging(verbose=args.verbose)
     
-    test_server(cleanup=not args.no_cleanup, 
-                executable_path=args.executable, 
-                server_args=server_args, 
-                manifest_url=args.manifest_url,
-                skip_validation=args.skip_validation)
+    test_server(cleanup=args.cleanup,
+            executable_path=args.executable, 
+            server_args=server_args, 
+            manifest_url=args.manifest_url,
+            skip_validation=args.skip_validation)
 
 if __name__ == "__main__":
     main()
