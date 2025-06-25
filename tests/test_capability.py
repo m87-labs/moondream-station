@@ -1,12 +1,13 @@
 import pexpect
 import logging
 import argparse
+from contextlib import contextmanager
 from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list
 
 # Timeout configurations
-QUICK_TIMEOUT = 100
-STANDARD_TIMEOUT = 300
-LONG_TIMEOUT = 600
+QUICK_TIMEOUT = 60
+STANDARD_TIMEOUT = 100
+LONG_TIMEOUT = 120
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
 
 def setup_logging(verbose=False):
@@ -26,26 +27,25 @@ def setup_logging(verbose=False):
         console_handler.setFormatter(console_formatter)
         logger.addHandler(console_handler)
 
-def start_server(executable_path='./moondream_station', args=None):
-    cmd = [executable_path]
-    if args:
-        cmd.extend(args)
+@contextmanager
+def server_session(executable_path='./moondream_station', args=None):
+    cmd = [executable_path] + (args or [])
     child = pexpect.spawn(' '.join(cmd))
     logging.debug(f"Starting up Moondream Station with command: {' '.join(cmd)}")
     child.expect('moondream>', timeout=STANDARD_TIMEOUT)
-    return child
-
-def end_server(child):
-    child.sendline('exit')
-    child.expect(r'Exiting Moondream CLI', timeout=QUICK_TIMEOUT)
-    child.isalive() and child.close(force=True)
-
-def check_health(child):
+    
+    # Health check
     child.sendline('health')
     child.expect('moondream>', timeout=STANDARD_TIMEOUT)
-    health_prompt = child.before.decode()
-    logging.debug(f"Health Check.\n{health_prompt}")
-    return child
+    logging.debug(f"Health Check.\n{child.before.decode()}")
+    
+    try:
+        yield child
+    finally:
+        # Cleanup
+        child.sendline('exit')
+        child.expect(r'Exiting Moondream CLI', timeout=QUICK_TIMEOUT)
+        child.isalive() and child.close(force=True)
 
 def parse_model_list_output(output):
     return [line[7:].strip() for line in output.split('\n') if line.strip().startswith('Model: ')]
@@ -96,7 +96,7 @@ def test_model_capabilities(child, model_name):
     expected_responses = load_expected_responses()
     if model_name not in expected_responses:
         logging.error(f"No expected responses found for model: {model_name}")
-        return child
+        return
     
     model_expected = expected_responses[model_name]
     
@@ -123,8 +123,6 @@ def test_model_capabilities(child, model_name):
     passed = sum(1 for r in results.values() if r['success'])
     total = len(results)
     logging.debug(f"Model capability tests: {passed}/{total} passed for {model_name}")
-    
-    return child
 
 def test_all_models(child):
     child.sendline('admin model-list')
@@ -146,20 +144,17 @@ def test_all_models(child):
             child.expect('moondream>', timeout=QUICK_TIMEOUT)
             logging.debug(f"Successfully switched to model: {model_name}\n")
             
-            child = test_model_capabilities(child, model_name)
+            test_model_capabilities(child, model_name)
             
         except Exception as e:
             logging.warning(f"Model switch to '{model_name}' failed: {e}")
-    
-    return child
 
 def test_server(cleanup=True, executable_path='./moondream_station', server_args=None):
     if cleanup:
         clean_files()
-    child = start_server(executable_path, server_args)
-    child = check_health(child)
-    child = test_all_models(child)
-    end_server(child)
+    
+    with server_session(executable_path, server_args) as child:
+        test_all_models(child)
 
 def main():
     parser = argparse.ArgumentParser(description='Test Moondream Station startup')
