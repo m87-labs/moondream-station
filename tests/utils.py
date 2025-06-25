@@ -9,16 +9,12 @@ import shutil
 import requests
 import re
 
-def clean_files(folder = "$HOME/.local/share/MoondreamStation"):
+def clean_files(folder="$HOME/.local/share/MoondreamStation"):
     folder = os.path.expanduser(folder)
     if os.path.exists(folder):
         logging.debug(f"Attempting to clean folder...{folder}")
         shutil.rmtree(folder)
-    if not os.path.exists(folder):
         logging.debug(f"Successfully cleaned {folder}")
-        return
-    else:
-        logging.debug(f"Folder was not cleaned.")
 
 def load_expected_responses(json_path="expected_responses.json"):
     """Load expected responses from JSON file"""
