@@ -1,9 +1,8 @@
 import pexpect
 import logging
 import argparse
-import os
 from contextlib import contextmanager
-from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list
+from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list, parse_model_list
 
 # Timeout configurations
 QUICK_TIMEOUT = 60
@@ -12,6 +11,7 @@ LONG_TIMEOUT = 120
 
 # URL Constants
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
+
 DEFAULT_MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
 
 def setup_logging(verbose=False):
@@ -49,9 +49,6 @@ def server_session(executable_path='./moondream_station', args=None):
         child.sendline('exit')
         child.expect(r'Exiting Moondream CLI', timeout=QUICK_TIMEOUT)
         child.isalive() and child.close(force=True)
-
-def parse_model_list_output(output):
-    return [line[7:].strip() for line in output.split('\n') if line.strip().startswith('Model: ')]
 
 def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT):
     logging.debug(f"Testing: {command}")
@@ -103,7 +100,6 @@ def test_model_capabilities(child, model_name):
     
     model_expected = expected_responses[model_name]
     
-    # Defines capabilities to test
     capabilities = [
         (f'caption {IMAGE_URL} --length {l}', model_expected[f'caption_{l}'], f'Caption {l.title()}')
         for l in ['short', 'normal', 'long']
@@ -136,7 +132,7 @@ def test_all_models(child, manifest_url=None):
     if manifest_url:
         validate_model_list(model_list_output, manifest_url)
     
-    models = parse_model_list_output(model_list_output)
+    models = list(parse_model_list(model_list_output).keys())
     logging.debug(f"Found {len(models)} models: {models}")
     
     for model_name in models:
@@ -153,28 +149,39 @@ def test_all_models(child, manifest_url=None):
         except Exception as e:
             logging.warning(f"Model switch to '{model_name}' failed: {e}")
 
-def test_server(cleanup=True, executable_path='./moondream_station', server_args=None, manifest_url=None):
+def test_server(cleanup=True, executable_path='./moondream_station', server_args=None, 
+                manifest_url=None, skip_validation=False):
     if cleanup:
         clean_files()
     
+    if manifest_url:
+        server_args = (server_args or []) + ['--manifest-url', manifest_url]
+    
     with server_session(executable_path, server_args) as child:
-        test_all_models(child, manifest_url)
+        # Only validate if not skipped
+        validation_url = None if skip_validation else manifest_url
+        test_all_models(child, validation_url)
 
 def main():
-    parser = argparse.ArgumentParser(description='Test Moondream Station startup')
+    parser = argparse.ArgumentParser(description='Test Moondream Station startup',
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--no-cleanup', action='store_true', help='Skip cleanup before test')
     parser.add_argument('--executable', default='./moondream_station', help='Path to moondream_station executable')
     parser.add_argument('--verbose', action='store_true', help='Print log messages to console')
-    parser.add_argument('--manifest-url', default=DEFAULT_MANIFEST_URL, help='URL to manifest.json for validation')
-    parser.add_argument('--skip-validation', action='store_true', help='Skip manifest validation')
+    parser.add_argument('--manifest-url', default=DEFAULT_MANIFEST_URL,
+                        help='URL or local path to manifest.json - passed to executable and used for validation')
+    parser.add_argument('--skip-validation', action='store_true', 
+                        help='Skip manifest validation (URL still passed to executable)')
     
     args, server_args = parser.parse_known_args()
     
     setup_logging(verbose=args.verbose)
     
-    manifest_url = None if args.skip_validation else args.manifest_url
-    test_server(cleanup=not args.no_cleanup, executable_path=args.executable, 
-                server_args=server_args, manifest_url=manifest_url)
+    test_server(cleanup=not args.no_cleanup, 
+                executable_path=args.executable, 
+                server_args=server_args, 
+                manifest_url=args.manifest_url,
+                skip_validation=args.skip_validation)
 
 if __name__ == "__main__":
     main()
