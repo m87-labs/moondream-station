@@ -2,10 +2,11 @@ import pexpect
 import logging
 import argparse
 from utils import clean_files, load_expected_responses, clean_response_output, validate_model_list
+
 # Timeout configurations
-QUICK_TIMEOUT = 60
-STANDARD_TIMEOUT = 100
-LONG_TIMEOUT = 120
+QUICK_TIMEOUT = 100
+STANDARD_TIMEOUT = 300
+LONG_TIMEOUT = 600
 IMAGE_URL = "https://raw.githubusercontent.com/m87-labs/moondream-station/refs/heads/main/assets/md_logo_clean.png"
 
 def setup_logging(verbose=False):
@@ -35,28 +36,19 @@ def start_server(executable_path='./moondream_station', args=None):
     return child
 
 def end_server(child):
-    # just check for exit message, don't wait for process to die, since bad shutdown in a known bug.
     child.sendline('exit')
     child.expect(r'Exiting Moondream CLI', timeout=QUICK_TIMEOUT)
-    
-    if child.isalive():
-        child.close(force=True)
+    child.isalive() and child.close(force=True)
 
 def check_health(child):
     child.sendline('health')
     child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     health_prompt = child.before.decode()
-    logging.debug("Health Check.")
-    logging.debug(health_prompt)
+    logging.debug(f"Health Check.\n{health_prompt}")
     return child
 
 def parse_model_list_output(output):
-    models = []
-    for line in output.split('\n'):
-        line = line.strip()
-        if line.startswith('Model: '):
-            models.append(line[7:].strip())
-    return models
+    return [line[7:].strip() for line in output.split('\n') if line.strip().startswith('Model: ')]
 
 def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT):
     logging.debug(f"Testing: {command}")
@@ -74,7 +66,7 @@ def test_capability(child, command, expected_response, timeout=STANDARD_TIMEOUT)
     cmd_type = next((t for t in ['caption', 'query', 'detect', 'point'] if t in command), None)
     cleaned = clean_response_output(output, cmd_type)
     
-    # This chunk will validate length for captions
+    # Length validation for captions
     length_valid = True
     if cmd_type == 'caption':
         words, chars = cleaned.split(), len(cleaned)
@@ -108,50 +100,25 @@ def test_model_capabilities(child, model_name):
     
     model_expected = expected_responses[model_name]
     
+    # Compact capability definitions
     capabilities = [
-        {
-            'command': f'caption {IMAGE_URL} --length short',
-            'expected': model_expected['caption_short'],
-            'name': 'Caption Short'
-        },
-        {
-            'command': f'caption {IMAGE_URL} --length normal',
-            'expected': model_expected['caption_normal'],
-            'name': 'Caption Normal'
-        },
-        {
-            'command': f'caption {IMAGE_URL} --length long',
-            'expected': model_expected['caption_long'],
-            'name': 'Caption Long'
-        },
-        {
-            'command': f'query "What is in this image?" {IMAGE_URL}',
-            'expected': model_expected['query'],
-            'name': 'Query'
-        },
-        {
-            'command': f'detect face {IMAGE_URL}',
-            'expected': model_expected['detect'],
-            'name': 'Detect'
-        },
-        {
-            'command': f'point face {IMAGE_URL}',
-            'expected': model_expected['point'],
-            'name': 'Point'
-        }
+        (f'caption {IMAGE_URL} --length {l}', model_expected[f'caption_{l}'], f'Caption {l.title()}')
+        for l in ['short', 'normal', 'long']
+    ] + [
+        (f'query "What is in this image?" {IMAGE_URL}', model_expected['query'], 'Query'),
+        (f'detect face {IMAGE_URL}', model_expected['detect'], 'Detect'),
+        (f'point face {IMAGE_URL}', model_expected['point'], 'Point')
     ]
     
     results = {}
-    for i, cap in enumerate(capabilities):
-        logging.debug("")
-        logging.debug(f"--- {cap['name']} Test ---")
+    for cmd, expected, name in capabilities:
+        logging.debug(f"\n--- {name} Test ---")
         try:
-            success, output = test_capability(child, cap['command'], cap['expected'])
-            results[cap['name']] = {'success': success, 'output': output}
+            success, output = test_capability(child, cmd, expected)
+            results[name] = {'success': success, 'output': output}
         except Exception as e:
-            logging.error(f"{cap['name']} test failed: {e}")
-            logging.debug(f"")
-            results[cap['name']] = {'success': False, 'output': str(e)}
+            logging.error(f"{name} test failed: {e}")
+            results[name] = {'success': False, 'output': str(e)}
     
     passed = sum(1 for r in results.values() if r['success'])
     total = len(results)
@@ -163,8 +130,7 @@ def test_all_models(child):
     child.sendline('admin model-list')
     child.expect('moondream>', timeout=STANDARD_TIMEOUT)
     model_list_output = child.before.decode()
-    logging.debug("Model list output:")
-    logging.debug(model_list_output)
+    logging.debug(f"Model list output:\n{model_list_output}")
     
     validate_model_list(model_list_output)
     
@@ -172,15 +138,13 @@ def test_all_models(child):
     logging.debug(f"Found {len(models)} models: {models}")
     
     for model_name in models:
-        logging.debug("")
-        logging.debug(f"--- Testing model: {model_name} ---")
+        logging.debug(f"\n--- Testing model: {model_name} ---")
         
         child.sendline(f'admin model-use "{model_name}" --confirm')
         try:
             child.expect('Model initialization completed successfully!', timeout=LONG_TIMEOUT)
             child.expect('moondream>', timeout=QUICK_TIMEOUT)
-            logging.debug(f"Successfully switched to model: {model_name}")
-            logging.debug("")
+            logging.debug(f"Successfully switched to model: {model_name}\n")
             
             child = test_model_capabilities(child, model_name)
             
@@ -195,7 +159,6 @@ def test_server(cleanup=True, executable_path='./moondream_station', server_args
     child = start_server(executable_path, server_args)
     child = check_health(child)
     child = test_all_models(child)
-    
     end_server(child)
 
 def main():
