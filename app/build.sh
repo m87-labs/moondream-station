@@ -15,8 +15,6 @@ done
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
 
-# NO DEFAULT VERSION - if VERSION is empty, we won't create info.json
-
 # Special handling for 'run' command
 if [[ "$TYPE" == "run" ]]; then
     EXTRA_ARGS=("${ARGS[@]:1}")
