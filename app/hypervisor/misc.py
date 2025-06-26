@@ -4,32 +4,29 @@ import os
 import json
 import logging
 from pathlib import Path
+import sys
 
 
 def get_component_version(fallback_version="v0.0.1"):
-    """
-    Load component version from bundled info.json
-    
-    Args:
-        fallback_version: Version to use if info.json cannot be loaded
-        
-    Returns:
-        str: Component version
-    """
+    """Load component version from bundled info.json"""
     try:
-        # PyInstaller bundle path
-        if getattr(sys, 'frozen', False):
+        # First, try current directory (for hypervisor Python files)
+        info_path = os.path.join(os.path.dirname(__file__), 'info.json')
+        
+        if not os.path.exists(info_path) and getattr(sys, 'frozen', False):
+            # If not found and we're in PyInstaller bundle
             info_path = os.path.join(sys._MEIPASS, 'info.json')
-        else:
-            # Development path - look in current file's directory
-            info_path = os.path.join(os.path.dirname(__file__), 'info.json')
         
         if os.path.exists(info_path):
             with open(info_path, 'r') as f:
                 info = json.load(f)
-                return info.get("version", fallback_version)
+                version = info.get("version", fallback_version)
+                logging.info(f"Loaded version {version} from {info_path}")
+                return version
+        else:
+            logging.info(f"No info.json found at {info_path}, using fallback {fallback_version}")
     except Exception as e:
-        logging.warning(f"Could not load version from info.json: {e}")
+        logging.warning(f"Could not load version from info.json: {e}, using fallback {fallback_version}")
     
     return fallback_version
 

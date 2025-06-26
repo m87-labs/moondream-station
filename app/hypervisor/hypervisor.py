@@ -13,8 +13,7 @@ from inferencevisor import InferenceVisor
 from clivisor import CLIVisor
 from manifest import Manifest
 from config import Config
-from misc import download_file, get_app_dir, check_platform
-from misc import get_component_version
+from misc import download_file, get_app_dir, check_platform, get_component_version
 from display_utils import Spinner
 
 logger = logging.getLogger("hypervisor")

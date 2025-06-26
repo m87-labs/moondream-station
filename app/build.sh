@@ -15,10 +15,7 @@ done
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
 
-# Default version if not specified
-if [[ -z "$VERSION" ]]; then
-    VERSION="v0.0.1"
-fi
+# NO DEFAULT VERSION - if VERSION is empty, we won't create info.json
 
 # Special handling for 'run' command
 if [[ "$TYPE" == "run" ]]; then
@@ -44,8 +41,16 @@ set -euo pipefail
 ##############################################################################
 create_info_json() {
     local version=$1
+    local component=$2
+    local build_date=$(date +%Y-%m-%d)
+    
     cat > info.json <<EOF
-{"version": "$version"}
+{
+    "version": "$version",
+    "component": "$component",
+    "build_date": "$build_date",
+    "platform": "$PLATFORM"
+}
 EOF
 }
 
@@ -81,17 +86,21 @@ PY
 
     PYI_ARGS="--onefile" 
 
-    echo "Building 'inference' version $VERSION..."
+    echo "Building 'inference'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
 
-    # Create info.json for this build
-    create_info_json "$VERSION" "inference"
+    # Only create info.json and add to build if version was specified
+    local ADD_DATA_ARG=""
+    if [[ -n "$VERSION" ]]; then
+        create_info_json "$VERSION" "inference"
+        ADD_DATA_ARG="--add-data info.json:."
+    fi
 
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
         --hidden-import=pyvips \
-        --add-data "info.json:." \
+        $ADD_DATA_ARG \
         --name "$NAME" \
         --clean \
         --distpath "$DIST_DIR" \
@@ -108,7 +117,7 @@ PY
     # Also create unversioned for backward compatibility
     cp "../output/inference_bootstrap_${VERSION_TAG}.tar.gz" "../output/inference_bootstrap.tar.gz"
     
-    # Clean up info.json
+    # Clean up info.json if it exists
     rm -f info.json
     
     echo "✔ inference $VERSION → $DIST_DIR"
@@ -158,16 +167,21 @@ PY
         display_utils.py
     )
 
-    echo "Building 'hypervisor' version $VERSION for $PLATFORM..."
+    echo "Building 'hypervisor' for $PLATFORM..."
     rm -rf "$DIST_DIR" "$SUP_DIR"; mkdir -p "$DIST_DIR" "$SUP_DIR"
 
-    # Create info.json for this build
-    create_info_json "$VERSION" "hypervisor"
+    # Only create info.json if version was specified
+    local ADD_DATA_ARG=""
+    if [[ -n "$VERSION" ]]; then
+        echo "  with version $VERSION"
+        create_info_json "$VERSION" "hypervisor"
+        ADD_DATA_ARG="--add-data info.json:."
+    fi
 
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
-        --add-data "info.json:." \
+        $ADD_DATA_ARG \
         --name "$NAME" \
         --clean \
         --distpath "$DIST_DIR" \
@@ -176,6 +190,11 @@ PY
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
+    
+    # Only copy info.json if it exists (version was specified)
+    if [[ -f info.json ]]; then
+        cp info.json "$SUP_DIR/"
+    fi
     
     # Create versioned tar files
     local VERSION_TAG="${VERSION//\./_}"  # v0.0.1 -> v0_0_1
@@ -197,32 +216,31 @@ build_cli() {
     local DIST_DIR="../output/moondream-cli"
     local SRC_DIR="../app/moondream_cli"
 
-    echo "Building 'cli' version $VERSION..."
+    echo "Building 'cli'..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
     
-    # Create info.json for CLI (even though it's not compiled)
-    create_info_json "$VERSION" "cli"
-    
     cp -r "$SRC_DIR" "$DIST_DIR/"
-    cp info.json "$DIST_DIR/moondream_cli/"
     
-    # Create versioned tar file
-    local VERSION_TAG="${VERSION//\./_}"  # v0.0.1 -> v0_0_1
-    tar -czf "../output/moondream-cli_${VERSION_TAG}.tar.gz" -C "$DIST_DIR" moondream_cli
+    # Only create and copy info.json if version was specified
+    if [[ -n "$VERSION" ]]; then
+        create_info_json "$VERSION" "cli"
+        cp info.json "$DIST_DIR/moondream_cli/"
+        rm -f info.json
+    fi
     
-    # Also create unversioned for backward compatibility
-    cp "../output/moondream-cli_${VERSION_TAG}.tar.gz" "../output/moondream-cli.tar.gz"
+    # Create unversioned tar file
+    tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
     
-    # Clean up info.json
-    rm -f info.json
-    
-    echo "✔ cli $VERSION → $DIST_DIR"
+    echo "✔ cli → $DIST_DIR"
 }
 
 ##############################################################################
 # dev sandbox
 ##############################################################################
 prepare_dev() {
+    # Build all components
+    echo "Building dev environment..."
+    
     build_cli
     build_inference
     build_hypervisor
@@ -236,7 +254,9 @@ prepare_dev() {
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2; exit 1
     fi
 
-    mkdir -p "$DEV_DIR/inference/v0.0.1"
+    # For inference directory, use VERSION if specified, otherwise v0.0.1
+    local INFERENCE_VERSION="${VERSION:-v0.0.1}"
+    mkdir -p "$DEV_DIR/inference/$INFERENCE_VERSION"
 
     # copy hypervisor supplements
     local HYP_SRC="../output/moondream-station-files"
@@ -248,12 +268,17 @@ prepare_dev() {
     for f in "${HYP_FILES[@]}"; do
         cp "$HYP_SRC/$f" "$DEV_DIR/"
     done
+    
+    # Only copy info.json if it exists
+    if [[ -f "$HYP_SRC/info.json" ]]; then
+        cp "$HYP_SRC/info.json" "$DEV_DIR/"
+    fi
 
     # copy CLI dir
     cp -r "../output/moondream-cli/moondream_cli" "$DEV_DIR/"
 
-    # copy inference build
-    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/v0.0.1/"
+    # copy inference build to versioned directory
+    cp -r "../output/inference_bootstrap" "$DEV_DIR/inference/$INFERENCE_VERSION/"
 
     echo "✔ dev sandbox ready → $DEV_DIR"
 }
