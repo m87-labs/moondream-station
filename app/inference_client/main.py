@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Dep
 from fastapi.responses import JSONResponse, StreamingResponse
 from PIL import Image
 from model_service import ModelService
+from misc import get_component_version
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.background import BackgroundTask
 
@@ -21,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("pyvips").setLevel(logging.ERROR)
 
-VERSION = "v0.0.2"
+VERSION = get_component_version("v0.0.1")  # Default version, can be overridden by info.json
 
 
 async def lifespan(app: FastAPI):

@@ -2,16 +2,23 @@
 
 # Parse args
 CLEAN=false
+VERSION=""  # Add version parameter
 ARGS=()
 for arg in "$@"; do
     case $arg in
         --build-clean) CLEAN=true ;;
+        --version=*) VERSION="${arg#*=}" ;;  # Extract version
         *) ARGS+=("$arg") ;;
     esac
 done
 
 TYPE=${ARGS[0]:-}
 PLATFORM=${ARGS[1]:-ubuntu}
+
+# Default version if not specified
+if [[ -z "$VERSION" ]]; then
+    VERSION="v0.0.1"
+fi
 
 # Special handling for 'run' command
 if [[ "$TYPE" == "run" ]]; then
@@ -33,6 +40,16 @@ fi
 set -euo pipefail
 
 ##############################################################################
+# Helper function to create info.json
+##############################################################################
+create_info_json() {
+    local version=$1
+    cat > info.json <<EOF
+{"version": "$version"}
+EOF
+}
+
+##############################################################################
 # builders
 ##############################################################################
 build_inference() {
@@ -44,7 +61,7 @@ build_inference() {
     local FILES=(main.py model_service.py requirements.txt)
 
     local LIBPYTHON
-        LIBPYTHON=$(
+    LIBPYTHON=$(
 python - <<'PY'
 import os, sysconfig, pathlib, sys
 libdir = pathlib.Path(sysconfig.get_config_var("LIBDIR") or "")
@@ -62,17 +79,19 @@ else:
 PY
 ) || exit 1
 
-        # Build a single-file executable and drop libpython next to the bootstrap
-        PYI_ARGS="--onefile" 
-        #--add-binary ${LIBPYTHON}"
+    PYI_ARGS="--onefile" 
 
-    echo "Building 'inference'..."
+    echo "Building 'inference' version $VERSION..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
+
+    # Create info.json for this build
+    create_info_json "$VERSION" "inference"
 
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
         --hidden-import=pyvips \
+        --add-data "info.json:." \
         --name "$NAME" \
         --clean \
         --distpath "$DIST_DIR" \
@@ -81,9 +100,18 @@ PY
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$DIST_DIR"
     done
-    echo "!!!!!! my current working dir is $PWD"
-    tar -czf "../output/inference_bootstrap.tar.gz" -C "../output" "inference_bootstrap"
-    echo "✔ inference → $DIST_DIR"
+    
+    # Create versioned tar file
+    local VERSION_TAG="${VERSION//\./_}"  # v0.0.1 -> v0_0_1
+    tar -czf "../output/inference_bootstrap_${VERSION_TAG}.tar.gz" -C "../output" "inference_bootstrap"
+    
+    # Also create unversioned for backward compatibility
+    cp "../output/inference_bootstrap_${VERSION_TAG}.tar.gz" "../output/inference_bootstrap.tar.gz"
+    
+    # Clean up info.json
+    rm -f info.json
+    
+    echo "✔ inference $VERSION → $DIST_DIR"
 }
 
 build_hypervisor() {
@@ -113,9 +141,7 @@ else:
 PY
 ) || exit 1
 
-        # Build a single-file executable and drop libpython next to the bootstrap
         PYI_ARGS="--onefile"
-        # --add-binary ${LIBPYTHON}"
     else
         echo "Unknown platform '$PLATFORM' (mac|ubuntu)" >&2
         exit 1
@@ -132,12 +158,16 @@ PY
         display_utils.py
     )
 
-    echo "Building 'hypervisor' for $PLATFORM..."
+    echo "Building 'hypervisor' version $VERSION for $PLATFORM..."
     rm -rf "$DIST_DIR" "$SUP_DIR"; mkdir -p "$DIST_DIR" "$SUP_DIR"
+
+    # Create info.json for this build
+    create_info_json "$VERSION" "hypervisor"
 
     pyinstaller $PYI_ARGS \
         --hidden-import=urllib.request \
         --hidden-import=zipfile \
+        --add-data "info.json:." \
         --name "$NAME" \
         --clean \
         --distpath "$DIST_DIR" \
@@ -146,9 +176,20 @@ PY
     for f in "${FILES[@]}"; do
         cp "$SRC_DIR/$f" "$SUP_DIR/"
     done
-    tar -czf "../output/hypervisor.tar.gz" -C "$SUP_DIR" .
-    tar -czf "../output/moondream_station_ubuntu.tar.gz" -C "$DIST_DIR" moondream_station
-    echo "✔ hypervisor → $DIST_DIR"
+    
+    # Create versioned tar files
+    local VERSION_TAG="${VERSION//\./_}"  # v0.0.1 -> v0_0_1
+    tar -czf "../output/hypervisor_${VERSION_TAG}.tar.gz" -C "$SUP_DIR" .
+    tar -czf "../output/moondream_station_ubuntu_${VERSION_TAG}.tar.gz" -C "$DIST_DIR" moondream_station
+    
+    # Also create unversioned for backward compatibility
+    cp "../output/hypervisor_${VERSION_TAG}.tar.gz" "../output/hypervisor.tar.gz"
+    cp "../output/moondream_station_ubuntu_${VERSION_TAG}.tar.gz" "../output/moondream_station_ubuntu.tar.gz"
+    
+    # Clean up info.json
+    rm -f info.json
+    
+    echo "✔ hypervisor $VERSION → $DIST_DIR"
 }
 
 build_cli() {
@@ -156,11 +197,26 @@ build_cli() {
     local DIST_DIR="../output/moondream-cli"
     local SRC_DIR="../app/moondream_cli"
 
-    echo "Building 'cli'..."
+    echo "Building 'cli' version $VERSION..."
     rm -rf "$DIST_DIR"; mkdir -p "$DIST_DIR"
+    
+    # Create info.json for CLI (even though it's not compiled)
+    create_info_json "$VERSION" "cli"
+    
     cp -r "$SRC_DIR" "$DIST_DIR/"
-    tar -czf "../output/moondream-cli.tar.gz" -C "$DIST_DIR" moondream_cli
-    echo "✔ cli → $DIST_DIR"
+    cp info.json "$DIST_DIR/moondream_cli/"
+    
+    # Create versioned tar file
+    local VERSION_TAG="${VERSION//\./_}"  # v0.0.1 -> v0_0_1
+    tar -czf "../output/moondream-cli_${VERSION_TAG}.tar.gz" -C "$DIST_DIR" moondream_cli
+    
+    # Also create unversioned for backward compatibility
+    cp "../output/moondream-cli_${VERSION_TAG}.tar.gz" "../output/moondream-cli.tar.gz"
+    
+    # Clean up info.json
+    rm -f info.json
+    
+    echo "✔ cli $VERSION → $DIST_DIR"
 }
 
 ##############################################################################
@@ -219,7 +275,8 @@ case "$TYPE" in
     dev)         prepare_dev       ;;
     run)         run_station "${EXTRA_ARGS[@]}" ;;
     *)
-        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] | $0 run" >&2
+        echo "Usage: $0 {inference|hypervisor|cli|dev} [platform] [--version=VERSION] | $0 run" >&2
+        echo "Example: $0 hypervisor ubuntu --version=v0.0.2" >&2
         exit 1
         ;;
 esac

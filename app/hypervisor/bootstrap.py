@@ -26,7 +26,6 @@ else:
     sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
 
 PYTHON_VERSION = "3.10"
-BOOTSTRAP_VERSION = "v0.0.1"
 HYPERVISOR_TAR_URL = (
     f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
 )

@@ -18,8 +18,8 @@ from config import Config
 
 from moondream_cli.commands.inference_commands import InferenceCommands
 from moondream_cli.commands.admin_commands import AdminCommands
-
-VERSION = "v0.0.1"
+from misc import get_component_version
+VERSION = get_component_version("v0.0.1")  # Default version, can be overridden by info.json
 
 
 class HypervisorCLI:

@@ -1,8 +1,37 @@
 import platform
 import urllib.request
 import os
+import json
+import logging
 from pathlib import Path
 
+
+def get_component_version(fallback_version="v0.0.1"):
+    """
+    Load component version from bundled info.json
+    
+    Args:
+        fallback_version: Version to use if info.json cannot be loaded
+        
+    Returns:
+        str: Component version
+    """
+    try:
+        # PyInstaller bundle path
+        if getattr(sys, 'frozen', False):
+            info_path = os.path.join(sys._MEIPASS, 'info.json')
+        else:
+            # Development path - look in current file's directory
+            info_path = os.path.join(os.path.dirname(__file__), 'info.json')
+        
+        if os.path.exists(info_path):
+            with open(info_path, 'r') as f:
+                info = json.load(f)
+                return info.get("version", fallback_version)
+    except Exception as e:
+        logging.warning(f"Could not load version from info.json: {e}")
+    
+    return fallback_version
 
 def parse_version(version: str) -> tuple[int, ...]:
     """

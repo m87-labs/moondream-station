@@ -14,10 +14,12 @@ from clivisor import CLIVisor
 from manifest import Manifest
 from config import Config
 from misc import download_file, get_app_dir, check_platform
+from misc import get_component_version
 from display_utils import Spinner
 
 logger = logging.getLogger("hypervisor")
-HYPERVISOR_VERSION = "v0.0.1"
+HYPERVISOR_VERSION = get_component_version("v0.0.1")
+
 PLATFORM = check_platform()
 
 
