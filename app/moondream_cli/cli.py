@@ -1,6 +1,8 @@
 import sys
 import os
 import moondream as md
+import json
+import logging
 from typing import Dict, Optional
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,7 +21,33 @@ from config import Config
 from moondream_cli.commands.inference_commands import InferenceCommands
 from moondream_cli.commands.admin_commands import AdminCommands
 
-VERSION = "v0.0.1"
+def get_cli_version(fallback_version="v0.0.1"):
+    """
+    Load CLI version from bundled info.json
+    
+    Args:
+        fallback_version: Version to use if info.json cannot be loaded
+        
+    Returns:
+        str: Component version
+    """
+    try:
+        # PyInstaller bundle path
+        if getattr(sys, 'frozen', False):
+            info_path = os.path.join(sys._MEIPASS, 'info.json')
+        else:
+            # Development path - look in current file's directory
+            info_path = os.path.join(os.path.dirname(__file__), 'info.json')
+        
+        if os.path.exists(info_path):
+            with open(info_path, 'r') as f:
+                info = json.load(f)
+                return info.get("version", fallback_version)
+    except Exception as e:
+        logging.warning(f"Could not load version from info.json: {e}")
+    
+    return fallback_version
+VERSION = get_cli_version("v0.0.1")  # Default version, can be overridden by info.json
 
 
 class HypervisorCLI:

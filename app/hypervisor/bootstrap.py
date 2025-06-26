@@ -15,7 +15,7 @@ import shutil
 
 from display_utils import print_banner, Spinner
 from config import DEFAULT_CONFIG
-from misc import download_file, check_platform, get_app_dir
+from misc import download_file, check_platform, get_app_dir, get_component_version
 
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
@@ -26,7 +26,7 @@ else:
     sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
 
 PYTHON_VERSION = "3.10"
-BOOTSTRAP_VERSION = "v0.0.1"
+BOOTSTRAP_VERSION = get_component_version("v0.0.1")  # Default version, can be overridden by info.json
 HYPERVISOR_TAR_URL = (
     f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
 )
@@ -40,6 +40,7 @@ if PLATFORM == "macOS":
     )
 
 sys.stdout.reconfigure(line_buffering=True, write_through=True)
+
 
 
 def configure_logging(log_dir: str, verbose: bool = False) -> logging.Logger:
