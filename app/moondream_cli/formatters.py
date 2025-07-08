@@ -111,6 +111,9 @@ def model_commands_box():
         "│  admin                    Administrative commands                     │"
     )
     result.append(
+        "│  clear                    Clear the terminal screen                   │"
+    )
+    result.append(
         "│  exit, quit               Exit the shell                              │"
     )
     result.append(empty_line())

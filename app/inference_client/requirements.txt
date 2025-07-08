@@ -1,7 +1,8 @@
 transformers==4.44.0
 torch==2.6.0
 pillow==10.4.0
-pyvips==2.2.3
+pyvips>=3.0.0
+cffi>=1.17.1
 accelerate==1.6.0
 huggingface-hub==0.24.0
 fastapi==0.115.12

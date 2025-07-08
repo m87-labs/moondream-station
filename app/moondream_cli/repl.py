@@ -34,6 +34,7 @@ class MoondreamREPL:
             "detect": self.detect,
             "point": self.point,
             "health": self.health,
+            "clear": self.clear,
             "admin": self.admin,
         }
         self.attached_station = attached_station
@@ -139,7 +140,7 @@ class MoondreamREPL:
                     if data.get("ood", False):
                         has_updates = True
                         update_messages.append(
-                            f"{component.capitalize()} update available: {data.get('version', '') or data.get('revision', 'unknown')}"
+                            f"{component.capitalize()} update available: {data.get('version', '') or data.get('model_name', 'unknown')}"
                         )
 
                 if has_updates:
@@ -232,6 +233,9 @@ class MoondreamREPL:
                 print("  point person photo.jpg")
                 print("  point chair room.jpg")
                 print("  point building cityscape.png")
+            elif cmd == "clear":
+                print("Clear the terminal screen")
+                print("Usage: clear")
             elif cmd == "admin":
                 # Display the same box as when calling 'admin' directly
                 print(admin_commands_box())
@@ -360,6 +364,10 @@ class MoondreamREPL:
             self.cli.health()
         except Exception as e:
             print(f"Error: {e}")
+    
+    def clear(self, args: List[str] = None):
+        """Handle clear command."""
+        os.system('cls' if os.name == 'nt' else 'clear')
 
     def admin(self, args: List[str]):
         """Handle admin commands."""

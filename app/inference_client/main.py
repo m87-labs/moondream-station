@@ -3,6 +3,8 @@ import time
 import warnings
 import logging
 import json
+import sys
+import os
 import base64
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, HTTPException, Depends
@@ -21,11 +23,42 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("pyvips").setLevel(logging.ERROR)
 
-VERSION = "v0.0.3"
+
+def get_inference_version(fallback_version="v0.0.2"):
+    """
+    Load inference client version from bundled info.json
+
+    Args:
+        fallback_version: Version to use if info.json cannot be loaded
+
+    Returns:
+        str: Component version
+    """
+    try:
+        # PyInstaller bundle path
+        if getattr(sys, "frozen", False):
+            info_path = os.path.join(sys._MEIPASS, "info.json")
+        else:
+            # Development path - look in current file's directory
+            info_path = os.path.join(os.path.dirname(__file__), "info.json")
+
+        if os.path.exists(info_path):
+            with open(info_path, "r") as f:
+                info = json.load(f)
+                return info.get("version", fallback_version)
+    except Exception as e:
+        logging.warning(f"Could not load version from info.json: {e}")
+
+    return fallback_version
+
+
+VERSION = get_inference_version(
+    "v0.0.2"
+)  # Default version, can be overridden by info.json
 
 
 async def lifespan(app: FastAPI):
-    model_name = "moondream/moondream-2b-2025-04-14-4bit"
+    model_name = getattr(app.state, "model_id", "vikhyatk/moondream2")
     revision = getattr(app.state, "revision", None)
     app.state.model_service = ModelService(model_name, revision)
     logger.info("Model initialized successfully.")
@@ -332,9 +365,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--revision", type=str, default=None, help="Moondream revision to use"
     )
+    parser.add_argument(
+        "--model-id", type=str, default=None, help="Moondream model ID to use"
+    )
     args = parser.parse_args()
 
     app.state.revision = args.revision
 
+    if args.model_id:
+        app.state.model_id = args.model_id
     logger.info(f"Starting server on port: {args.port}")
     uvicorn.run(app, host="0.0.0.0", port=args.port, log_level="error")

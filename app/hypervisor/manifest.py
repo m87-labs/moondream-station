@@ -4,7 +4,7 @@ import logging
 
 from typing import Dict, Any, Optional, List
 
-from misc import parse_version, parse_revision, download_file, check_platform
+from misc import parse_version, parse_date, download_file, check_platform
 
 PLATFORM = check_platform()
 MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
@@ -30,10 +30,15 @@ class Manifest:
             self._load_local()
 
     def update(self):
-        self.logger.debug(f"Downloading manifest from {self.url} to {self.path}")
-        self._download()
-        self.logger.debug(f"Loading manifest from {self.path}")
-        self._load_local()
+        if self.url.startswith(('http://', 'https://')):
+            self.logger.debug(f"Downloading manifest from {self.url} to {self.path}")
+            self._download()
+            self.logger.debug(f"Loading manifest from {self.path}")
+            self._load_local()
+        else:
+            self.logger.debug(f"Loading manifest directly from local path {self.url}")
+            self.path = self.url
+            self._load_local()
 
     def _load_local(self) -> Dict[str, Any]:
         try:
@@ -81,11 +86,14 @@ class Manifest:
     def current_cli(self) -> Dict[str, str]:
         return self.data.get("current_cli", {})
 
-    def get_model(self, revision: str) -> Optional[Dict[str, Any]]:
-        return {
-            "revision": revision,
-            "model": self.models.get(revision, None),
-        }
+    
+    def get_model(self, model_name: str) -> Optional[Dict[str, Any]]:
+        if model_name in self.models:
+            return {
+                "model_name": model_name,
+                "model": self.models[model_name],
+            }
+        return None
 
     @property
     def models(self) -> Dict[str, Dict[str, Any]]:
@@ -96,33 +104,42 @@ class Manifest:
         models_dict = self.models
         if not models_dict:
             return None
-        # Group revisions by their numeric components
+        
+        # Find models with latest release date
+        release_dates = [model_data.get("release_date") for model_data in models_dict.values() if model_data.get("release_date")]
+        if not release_dates:
+            return None
+        
+        # Group by date
         grouped = {}
-        for rev in models_dict.keys():
-            numeric = parse_revision(rev)
-            grouped.setdefault(numeric, []).append(rev)
-
-        # Determine the numerically latest revision
+        for date in release_dates:
+            numeric = parse_date(date)
+            grouped.setdefault(numeric, []).append(date)
+        
         latest_numeric = max(grouped.keys())
-        candidates = grouped[latest_numeric]
-
-        # Prefer a revision containing "4bit" when multiple revisions share the
-        # same numeric value. Otherwise favour the revision without alphabetic
-        # characters.
+        latest_date = grouped[latest_numeric][0]  # All same date anyway
+        
+        # Get all models with the latest date
+        candidate_models = [(name, data) for name, data in models_dict.items() 
+                        if data.get("release_date") == latest_date]
+        
+        # Apply preferences based on dtype, INT4 > FP16 in preference.
         chosen = None
-        for rev in candidates:
-            if "4bit" in rev:
-                chosen = rev
+        
+        for name, data in candidate_models:
+            dtype = data.get("dtype", "").lower()
+            if "int4" in dtype or "4bit" in dtype:
+                chosen = (name, data)
                 break
+        
+        # Fallback to first candidate
         if not chosen:
-            for rev in candidates:
-                if all(c.isdigit() or c == "-" for c in rev):
-                    chosen = rev
-                    break
-        if not chosen:
-            chosen = candidates[0]
-
-        return self.get_model(chosen)
+            chosen = candidate_models[0]
+        
+        return {
+            "model_name": chosen[0],
+            "model": chosen[1],
+        }
 
     def get_inference_client(self, version: str) -> Optional[Dict[str, str]]:
         return self.data.get("inference_clients", {}).get(version, None)

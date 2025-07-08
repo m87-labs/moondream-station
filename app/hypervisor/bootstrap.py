@@ -15,7 +15,7 @@ import shutil
 
 from display_utils import print_banner, Spinner
 from config import DEFAULT_CONFIG
-from misc import download_file, check_platform, get_app_dir
+from misc import download_file, check_platform, get_app_dir, get_component_version
 
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
@@ -26,7 +26,7 @@ else:
     sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
 
 PYTHON_VERSION = "3.10"
-BOOTSTRAP_VERSION = "v0.0.1"
+BOOTSTRAP_VERSION = get_component_version("v0.0.1")  # Default version, can be overridden by info.json
 HYPERVISOR_TAR_URL = (
     f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
 )
@@ -40,6 +40,7 @@ if PLATFORM == "macOS":
     )
 
 sys.stdout.reconfigure(line_buffering=True, write_through=True)
+
 
 
 def configure_logging(log_dir: str, verbose: bool = False) -> logging.Logger:
@@ -311,6 +312,19 @@ def install_requirements(venv_dir: str, logger: logging.Logger):
     if res.stderr:
         logger.debug(f"Pip upgrade stderr:\n{res.stderr}")
 
+    logger.info("Installing uv...")
+    with Spinner("Installing uv..."):
+        res_uv = subprocess.run(
+            [python_bin, "-m", "pip", "install", "--upgrade", "uv"],
+            capture_output=True,
+            text=True,
+        )
+    logger.info(f"uv install return code: {res_uv.returncode}")
+    if res_uv.stdout:
+        logger.debug(f"uv install stdout:\n{res_uv.stdout}")
+    if res_uv.stderr:
+        logger.debug(f"uv install stderr:\n{res_uv.stderr}")
+
     if not os.path.isfile(requirements_file):
         logger.info(f"'{requirements_file}' not found, skipping requirements install.")
         return
@@ -318,7 +332,7 @@ def install_requirements(venv_dir: str, logger: logging.Logger):
     logger.info(f"Installing requirements from {requirements_file}")
     with Spinner("Installing Python requirements (this may take several minutes)..."):
         res = subprocess.run(
-            [python_bin, "-m", "pip", "install", "-U", "-r", requirements_file],
+            [python_bin, "-m", "uv", "pip", "install", "-U", "-r", requirements_file],
             capture_output=True,
             text=True,
         )
@@ -346,7 +360,7 @@ def _unset_sll_cert(signum: int, frame, logger: logging.Logger) -> None:
     sys.exit(128 + signum)
 
 
-def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
+def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger, manifest_url: str = None):
     """Run the hypervisor server in a loop, restarting if needed.
     If exit code 99 is intercepted, update bootstrap. The update subprocess
     will kill and restart bootstrap.
@@ -370,10 +384,14 @@ def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger):
         if not os.path.isfile(main_py):
             logger.warning(f"'{main_py}' not found.")
             return
+        cmd = [python_bin, main_py]
+        if manifest_url:
+            cmd.extend(["--manifest-url", manifest_url])
 
         logger.info(f"Launching {main_py} via {python_bin}")
+        logger.info(f"Command to execute: {' '.join(cmd)}")
 
-        proc = subprocess.Popen([python_bin, main_py])
+        proc = subprocess.Popen(cmd)
         return_code = proc.wait()
         logger.warning(f"{main_py} exited with code {return_code}; restarting in 5s.")
         if return_code != 0:
@@ -734,7 +752,7 @@ def is_setup(app_dir: str) -> bool:
     return True
 
 
-def main(verbose: bool = False):
+def main(verbose: bool = False, manifest_url: str = None):
     """Entry point for Moondream Station.
 
     Handles setup of Python environment, downloads necessary components,
@@ -803,7 +821,9 @@ def main(verbose: bool = False):
     elapsed_time = time.time() - start_time
     logger.info(f"Bootup completed in {elapsed_time:.2f} seconds")
 
-    run_main_loop(venv_dir, app_dir, logger)
+    logger.info(f"Main function manifest_url: {manifest_url}")
+    run_main_loop(venv_dir, app_dir, logger, manifest_url=manifest_url)
+    
 
 
 if __name__ == "__main__":
@@ -816,6 +836,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Print detailed information to stdout",
     )
+    parser.add_argument(
+    "--manifest-url",
+    type=str,
+    help="Custom manifest URL"
+    )
     args = parser.parse_args()
 
-    main(verbose=args.verbose)
+    main(verbose=args.verbose, manifest_url=args.manifest_url)

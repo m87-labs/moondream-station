@@ -130,6 +130,13 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
+    # Clear command
+    clear_parser = subparsers.add_parser(
+        "clear",
+        help="Clear the terminal screen",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
     # Admin commands
     admin_parser = subparsers.add_parser(
         "admin",
@@ -298,6 +305,9 @@ def main():
 
     elif args.command == "health":
         cli.health()
+    
+    elif args.command == "clear":
+        cli.clear()
 
     elif args.command == "admin":
         if not hasattr(args, "admin_command") or args.admin_command is None:

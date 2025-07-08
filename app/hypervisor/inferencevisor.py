@@ -52,10 +52,11 @@ class InferenceVisor:
             self.config.active_inference_client = version
             logger.debug(f"Set active inference client to latest: {version}")
 
-            model = self.manifest.latest_model["revision"]
-            self.config.active_model = model
-            logger.debug(f"Set active model to latest: {model}")
-
+            latest_model_data = self.manifest.latest_model
+            model_name = latest_model_data["model_name"]
+            self.config.active_model = model_name
+            logger.debug(f"Set active model to latest: {model_name}")
+            
         client_path = os.path.join(self.inference_dir, version)
         bootstrap_path = os.path.join(
             client_path, "inference_bootstrap", "inference_bootstrap"
@@ -99,8 +100,17 @@ class InferenceVisor:
             # Revision refers to the Huggingface Moondream revision
             cmd = [bootstrap_path]
             if self.config.active_model:
-                cmd.extend(["--revision", self.config.active_model])
-
+                model_data = self.manifest.get_model(self.config.active_model)
+                if model_data and model_data["model"]:
+                    model_info = model_data["model"]
+                    model_id = model_info.get("model_id")
+                    revision = model_info.get("revision")
+                    
+                    if model_id:
+                        cmd.extend(["--model-id", model_id])
+                    if revision:
+                        cmd.extend(["--revision", revision])
+                        
             with Spinner(f"Loading Model {self.config.active_model}..."):
                 self.process = subprocess.Popen(
                     cmd,
@@ -131,6 +141,7 @@ class InferenceVisor:
                     # Check if we've timed out
                     if time.time() - start_time > timeout_seconds:
                         self.status = "boot timed out"
+                
                         logger.error(
                             f"Inference server startup timed out after {timeout_minutes} minutes"
                         )
@@ -140,8 +151,8 @@ class InferenceVisor:
                         }
 
                     # Wait before checking again
-                    time.sleep(3)
 
+                    time.sleep(3)
             self.status = "ok"
             return {
                 "status": "ok",
@@ -413,16 +424,16 @@ class InferenceVisor:
             update_manifest: If True, refresh manifest data before checking
 
         Returns:
-            dict: Status containing "ood" (out of date) flag and current version
+            dict: Status containing "ood" (out of date) flag and latest model name
         """
         if update_manifest:
             self.manifest.update()
 
         ret_value = {
             "ood": False,
-            "revision": self.manifest.latest_model["revision"],
+            "model_name": self.manifest.latest_model["model_name"],
         }
-        if self.config.active_model != self.manifest.latest_model["revision"]:
+        if self.config.active_model != self.manifest.latest_model["model_name"]:
             ret_value["ood"] = True
         return ret_value
 

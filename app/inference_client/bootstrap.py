@@ -271,9 +271,22 @@ def install_requirements(venv_dir: str, logger: logging.Logger):
         logger.info(f"'{requirements_file}' not found, skipping requirements install.")
         return
 
+    logger.info("Installing 'uv' into venv...")
+    res = subprocess.run(
+        [python_bin, "-m", "pip", "install", "--upgrade", "uv"],
+        capture_output=True, text=True,
+    )
+    logger.info(f"'uv' install return code: {res.returncode}")
+    if res.stdout:
+        logger.debug(f"'uv' install stdout:\n{res.stdout}")
+    if res.stderr:
+        logger.debug(f"'uv' install stderr:\n{res.stderr}")
+    if res.returncode != 0:
+        raise RuntimeError("Failed to install 'uv' via pip.")
+
     logger.info(f"Installing requirements from {requirements_file}")
     res = subprocess.run(
-        [python_bin, "-m", "pip", "install", "-U", "-r", requirements_file],
+        [python_bin, "-m", "uv", "pip", "install", "-r", requirements_file],
         capture_output=True,
         text=True,
     )

@@ -111,7 +111,7 @@ class CLIVisor:
 
         ret_value = {
             "ood": False,
-            "version": self.manifest.current_hypervisor["version"],
+            "version": self.manifest.current_cli["version"],
         }
         if self.config.active_cli != self.manifest.current_cli["version"]:
             ret_value["ood"] = True
