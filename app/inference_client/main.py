@@ -24,7 +24,7 @@ logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("pyvips").setLevel(logging.ERROR)
 
 
-def get_inference_version(fallback_version="v0.0.2"):
+def get_inference_version(fallback_version="v0.0.4"):
     """
     Load inference client version from bundled info.json
 
@@ -53,7 +53,7 @@ def get_inference_version(fallback_version="v0.0.2"):
 
 
 VERSION = get_inference_version(
-    "v0.0.3"
+    "v0.0.4"
 )  # Default version, can be overridden by info.json
 
 
@@ -171,13 +171,14 @@ async def caption_endpoint(
     model_service: ModelService = Depends(get_model_service),
 ):
     content_type = request.headers.get("content-type", "")
-
+    variant = None
     if "application/json" in content_type:
         body = await request.json()
         image_url = body.get("image_url")
         length = body.get("length", "normal")
         stream = body.get("stream", False)
         settings = body.get("settings", {})
+        variant = body.get("variant")
         if not image_url:
             raise HTTPException(status_code=400, detail="Missing 'image_url' in JSON.")
         image = load_base64_image(image_url)
@@ -204,11 +205,16 @@ async def caption_endpoint(
             length=length,
             stream=True,
             settings=settings,
+            variant=variant,
         )
         return StreamingResponse(event_generator, media_type="text/event-stream")
     else:
         result = process_inference(
-            image, model_service.caption, length=length, settings=settings
+            image,
+            model_service.caption,
+            length=length,
+            settings=settings,
+            variant=variant,
         )
         return JSONResponse({"caption": result["caption"], "request_id": 0})
 
@@ -221,13 +227,14 @@ async def query_endpoint(
     model_service: ModelService = Depends(get_model_service),
 ):
     content_type = request.headers.get("content-type", "")
-
+    variant = None
     if "application/json" in content_type:
         body = await request.json()
         image_url = body.get("image_url")
         question = body.get("question", "")
         stream = body.get("stream", False)
         settings = body.get("settings", {})
+        variant = body.get("variant")
         if not image_url or not question:
             raise HTTPException(
                 status_code=400,
@@ -254,10 +261,13 @@ async def query_endpoint(
             question=question,
             stream=True,
             settings=settings,
+            variant=variant,
         )
         return StreamingResponse(event_generator, media_type="text/event-stream")
     else:
-        result = process_inference(image, model_service.query, question=question)
+        result = process_inference(
+            image, model_service.query, question=question, variant=variant
+        )
         return JSONResponse({"answer": result["answer"], "request_id": 0})
 
 
@@ -269,18 +279,22 @@ async def detect_endpoint(
     model_service: ModelService = Depends(get_model_service),
 ):
     content_type = request.headers.get("content-type", "")
+    variant = None
 
     if "application/json" in content_type:
         body = await request.json()
         image_url = body.get("image_url")
         obj = body.get("object", "")
+        variant = body.get("variant")
         if not image_url or not obj:
             raise HTTPException(
                 status_code=400,
                 detail="Both 'image_url' and 'object' must be present in JSON.",
             )
         image = load_base64_image(image_url)
-        result = process_inference(image, model_service.detect, obj=obj)
+        result = process_inference(
+            image, model_service.detect, obj=obj, variant=variant
+        )
         obj = result.get("objects", [])
         return JSONResponse({"objects": obj, "request_id": 0})
     else:
@@ -314,13 +328,14 @@ async def point_endpoint(
         body = await request.json()
         image_url = body.get("image_url")
         obj = body.get("object", "")
+        variant = body.get("variant")
         if not image_url or not obj:
             raise HTTPException(
                 status_code=400,
                 detail="Both 'image_url' and 'object' must be present in JSON.",
             )
         image = load_base64_image(image_url)
-        result = process_inference(image, model_service.point, obj=obj)
+        result = process_inference(image, model_service.point, obj=obj, variant=variant)
         points = result.get("points", [])
         return JSONResponse({"points": points, "count": len(points)})
     else:

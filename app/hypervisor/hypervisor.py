@@ -17,7 +17,7 @@ from misc import download_file, get_app_dir, check_platform, get_component_versi
 from display_utils import Spinner
 
 logger = logging.getLogger("hypervisor")
-HYPERVISOR_VERSION = get_component_version("v0.0.1")
+HYPERVISOR_VERSION = get_component_version("v0.0.2")
 
 PLATFORM = check_platform()
 
@@ -30,9 +30,7 @@ class Hypervisor:
     including the inference server, CLI, and handling updates and metrics.
     """
 
-    def __init__(
-        self, manifest_url: Optional[str] = None
-    ):
+    def __init__(self, manifest_url: Optional[str] = None):
         self.config = Config()
         self.manifest = Manifest(url=manifest_url)
         self.inferencevisor = InferenceVisor(self.config, self.manifest)

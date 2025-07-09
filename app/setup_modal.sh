@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-modal shell --image ubuntu:20.04 --gpu L4 --add-python 3.9 --volume moondream-vol --cmd "
+modal shell --image ubuntu:20.04 --gpu L4 --add-python 3.10 --volume moondream-vol --cmd "
 apt update
 apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev git
 unset PYTHONPATH
@@ -40,37 +40,37 @@ ln -sf /usr/local/bin/pip3.10 /usr/bin/pip3
 ln -sf /usr/local/bin/pip3.10 /usr/bin/pip
 pip install pyinstaller distro certifi
 
+clear 
+
 cd /mnt/moondream-vol
 rm -rf moondream-station
-git clone <moondream-station-repo-url>
+git clone https://github.com/EthanReid/moondream-station.git
 
 cd /mnt/moondream-vol/moondream-station/
-rm -rf MoondreamStation.tar
-rm -rf moondream_station_executable.tar
-git checkout <branch-name>
+git checkout main
 git pull
 ls
+echo 'cloned git'
 
 cd /mnt/moondream-vol/moondream-station/app
-bash build.sh dev ubuntu --build-clean
+bash build.sh dev ubuntu
 cd /mnt/moondream-vol/moondream-station
-ls
+echo 'build files'
 
 cd /mnt/moondream-vol/moondream-station/output
-tar -cvf moondream_station_executable.tar moondream_station/
-cp moondream_station_executable.tar /mnt/moondream-vol/moondream-station/
-ls
+cp hypervisor.tar.gz /mnt/moondream-vol/moondream-station/
+cp inference_bootstrap.tar.gz /mnt/moondream-vol/moondream-station/
+cp moondream_station_ubuntu.tar.gz /mnt/moondream-vol/moondream-station/
+cp moondream-cli.tar.gz /mnt/moondream-vol/moondream-station/
+echo 'copied tar files'
 
-cd /root/.local/share/
-tar -cvf MoondreamStation.tar MoondreamStation/
-cp MoondreamStation.tar /mnt/moondream-vol/moondream-station/
-ls
-
-python --version
-pip --version
 exit
 exec bash
 "
-modal volume get moondream-vol /moondream-station/MoondreamStation.tar
-modal volume get moondream-vol /moondream-station/moondream_station_executable.tar
+echo "trying to download tar"
+modal volume get moondream-vol /moondream-station/hypervisor.tar.gz
+modal volume get moondream-vol /moondream-station/inference_bootstrap.tar.gz
+modal volume get moondream-vol /moondream-station/moondream_station_ubuntu.tar.gz
+modal volume get moondream-vol /moondream-station/moondream-cli.tar.gz
+
 echo "Setup complete. Moondream Station files exported."

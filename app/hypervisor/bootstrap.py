@@ -26,7 +26,9 @@ else:
     sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
 
 PYTHON_VERSION = "3.10"
-BOOTSTRAP_VERSION = get_component_version("v0.0.1")  # Default version, can be overridden by info.json
+BOOTSTRAP_VERSION = get_component_version(
+    "v0.0.2"
+)  # Default version, can be overridden by info.json
 HYPERVISOR_TAR_URL = (
     f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
 )
@@ -40,7 +42,6 @@ if PLATFORM == "macOS":
     )
 
 sys.stdout.reconfigure(line_buffering=True, write_through=True)
-
 
 
 def configure_logging(log_dir: str, verbose: bool = False) -> logging.Logger:
@@ -360,7 +361,9 @@ def _unset_sll_cert(signum: int, frame, logger: logging.Logger) -> None:
     sys.exit(128 + signum)
 
 
-def run_main_loop(venv_dir: str, app_dir: str, logger: logging.Logger, manifest_url: str = None):
+def run_main_loop(
+    venv_dir: str, app_dir: str, logger: logging.Logger, manifest_url: str = None
+):
     """Run the hypervisor server in a loop, restarting if needed.
     If exit code 99 is intercepted, update bootstrap. The update subprocess
     will kill and restart bootstrap.
@@ -823,7 +826,6 @@ def main(verbose: bool = False, manifest_url: str = None):
 
     logger.info(f"Main function manifest_url: {manifest_url}")
     run_main_loop(venv_dir, app_dir, logger, manifest_url=manifest_url)
-    
 
 
 if __name__ == "__main__":
@@ -836,11 +838,7 @@ if __name__ == "__main__":
         action="store_true",
         help="Print detailed information to stdout",
     )
-    parser.add_argument(
-    "--manifest-url",
-    type=str,
-    help="Custom manifest URL"
-    )
+    parser.add_argument("--manifest-url", type=str, help="Custom manifest URL")
     args = parser.parse_args()
 
     main(verbose=args.verbose, manifest_url=args.manifest_url)

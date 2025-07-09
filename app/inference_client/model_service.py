@@ -32,8 +32,14 @@ class ModelService:
             return "cpu"
 
     def caption(
-        self, image: Image.Image, length: str, stream: bool = False, settings: dict = {}
+        self,
+        image: Image.Image,
+        length: str,
+        stream: bool = False,
+        settings: dict = {},
+        variant: str = None,
     ) -> dict:
+        settings["variant"] = variant
         return self.model.caption(
             image, length=length, stream=stream, settings=settings
         )
@@ -44,11 +50,23 @@ class ModelService:
         question: str,
         stream: bool = False,
         settings: dict = {},
+        variant: str = None,
     ) -> dict:
+        settings["variant"] = variant
         return self.model.query(image, question, stream, settings)
 
-    def detect(self, image: Image.Image, obj: str, settings: dict = {}) -> dict:
+    def detect(
+        self,
+        image: Image.Image,
+        obj: str,
+        settings: dict = {},
+        variant=None,
+    ) -> dict:
+        settings["variant"] = variant
         return self.model.detect(image, obj, settings)
 
-    def point(self, image: Image.Image, obj: str, settings: dict = {}) -> dict:
+    def point(
+        self, image: Image.Image, obj: str, settings: dict = {}, variant=None
+    ) -> dict:
+        settings["variant"] = variant
         return self.model.point(image, obj, settings)
