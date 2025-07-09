@@ -13,10 +13,10 @@ class ModelService:
         self.device = self._get_best_device()
         logger.info(f"Initializing model on device: {self.device}")
         self.tokenizer = AutoTokenizer.from_pretrained(
-            model_name, revision=revision, trust_remote_code=True
+            model_name, revision=None, trust_remote_code=True
         )
         self.model = AutoModelForCausalLM.from_pretrained(
-            model_name, revision=revision, trust_remote_code=True
+            model_name, revision=None, trust_remote_code=True
         )
         self.model.to(self.device)
         logger.info(f"Model commit hash: {self.model.config._commit_hash}")

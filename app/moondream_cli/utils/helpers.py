@@ -53,8 +53,14 @@ def is_ubuntu() -> bool:
     return distro.id() == "ubuntu"
 
 
+def is_linux() -> bool:
+    return platform.system() == "Linux"
+
+
 def check_platform() -> str:
     if is_macos():
         return "macOS"
-    elif is_ubuntu():
-        return "ubuntu"
+    elif is_linux():
+        return "Linux"
+    else:
+        return "other"
