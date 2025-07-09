@@ -20,7 +20,7 @@ if PLATFORM == "macOS":
 elif PLATFORM == "Linux":
     MINIFORGE_MAC_URL = "https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-x86_64.sh"
 else:
-    sys.exit(f"Only macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
+    sys.exit(f"Only macOS and Linux are supported. Detected platform is {PLATFORM}")
 
 
 def get_executable_dir() -> str:
@@ -274,7 +274,8 @@ def install_requirements(venv_dir: str, logger: logging.Logger):
     logger.info("Installing 'uv' into venv...")
     res = subprocess.run(
         [python_bin, "-m", "pip", "install", "--upgrade", "uv"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     logger.info(f"'uv' install return code: {res.returncode}")
     if res.stdout:

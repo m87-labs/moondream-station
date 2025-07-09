@@ -53,7 +53,7 @@ def get_inference_version(fallback_version="v0.0.2"):
 
 
 VERSION = get_inference_version(
-    "v0.0.2"
+    "v0.0.3"
 )  # Default version, can be overridden by info.json
 
 
