@@ -53,7 +53,7 @@ class ModelService:
         variant: str = None,
     ) -> dict:
         settings["variant"] = variant
-        return self.model.query(image, question, stream, settings)
+        return self.model.query(image, question, stream=stream, settings=settings)
 
     def detect(
         self,
