@@ -51,9 +51,12 @@ class ModelService:
         stream: bool = False,
         settings: dict = {},
         variant: str = None,
+        reasoning: bool = False,
     ) -> dict:
         settings["variant"] = variant
-        return self.model.query(image, question, stream=stream, settings=settings)
+        return self.model.query(
+            image, question, stream=stream, settings=settings, reasoning=reasoning
+        )
 
     def detect(
         self,

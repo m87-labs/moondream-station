@@ -24,7 +24,7 @@ logging.getLogger("uvicorn").setLevel(logging.ERROR)
 logging.getLogger("pyvips").setLevel(logging.ERROR)
 
 
-def get_inference_version(fallback_version="v0.0.4"):
+def get_inference_version(fallback_version="v0.0.6"):
     """
     Load inference client version from bundled info.json
 
@@ -53,7 +53,7 @@ def get_inference_version(fallback_version="v0.0.4"):
 
 
 VERSION = get_inference_version(
-    "v0.0.4"
+    "v0.0.6"
 )  # Default version, can be overridden by info.json
 
 
@@ -235,6 +235,7 @@ async def query_endpoint(
         stream = body.get("stream", False)
         settings = body.get("settings", {})
         variant = body.get("variant")
+        reasoning = body.get("reasoning", False)
         if not image_url or not question:
             raise HTTPException(
                 status_code=400,
@@ -266,9 +267,16 @@ async def query_endpoint(
         return StreamingResponse(event_generator, media_type="text/event-stream")
     else:
         result = process_inference(
-            image, model_service.query, question=question, variant=variant
+            image,
+            model_service.query,
+            question=question,
+            variant=variant,
+            reasoning=reasoning,
         )
-        return JSONResponse({"answer": result["answer"], "request_id": 0})
+        resp = {"answer": result["answer"], "request_id": 0}
+        if result.get("reasoning"):
+            resp["reasoning"] = result.get("reasoning")
+        return JSONResponse(resp)
 
 
 @app.post("/v1/detect", summary="Detect objects in an image")
