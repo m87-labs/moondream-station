@@ -11,7 +11,6 @@ import signal
 from functools import partial
 from misc import check_platform
 
-MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-MacOSX-arm64.sh"
 PYTHON_VERSION = "3.10"
 
 PLATFORM = check_platform()

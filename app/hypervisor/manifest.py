@@ -7,7 +7,12 @@ from typing import Dict, Any, Optional, List
 from misc import parse_version, parse_date, download_file, check_platform
 
 PLATFORM = check_platform()
-MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
+if PLATFORM == "macOS":
+    MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest.json"
+    print("My platofrm is ", PLATFORM)
+    print("manifest url", MANIFEST_URL)
+else:
+    MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
 MODEL_SIZE = "2b"
 
 
@@ -19,7 +24,7 @@ class Manifest:
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self.path = path or os.path.join(base_dir, "data", "manifest.json")
-        self.url = url or MANIFEST_URL
+        self.url = MANIFEST_URL or self.path
         self.update()
 
     def load(self):
@@ -30,7 +35,7 @@ class Manifest:
             self._load_local()
 
     def update(self):
-        if self.url.startswith(('http://', 'https://')):
+        if self.url.startswith(("http://", "https://")):
             self.logger.debug(f"Downloading manifest from {self.url} to {self.path}")
             self._download()
             self.logger.debug(f"Loading manifest from {self.path}")
@@ -86,7 +91,6 @@ class Manifest:
     def current_cli(self) -> Dict[str, str]:
         return self.data.get("current_cli", {})
 
-    
     def get_model(self, model_name: str) -> Optional[Dict[str, Any]]:
         if model_name in self.models:
             return {
@@ -104,38 +108,45 @@ class Manifest:
         models_dict = self.models
         if not models_dict:
             return None
-        
+
         # Find models with latest release date
-        release_dates = [model_data.get("release_date") for model_data in models_dict.values() if model_data.get("release_date")]
+        release_dates = [
+            model_data.get("release_date")
+            for model_data in models_dict.values()
+            if model_data.get("release_date")
+        ]
         if not release_dates:
             return None
-        
+
         # Group by date
         grouped = {}
         for date in release_dates:
             numeric = parse_date(date)
             grouped.setdefault(numeric, []).append(date)
-        
+
         latest_numeric = max(grouped.keys())
         latest_date = grouped[latest_numeric][0]  # All same date anyway
-        
+
         # Get all models with the latest date
-        candidate_models = [(name, data) for name, data in models_dict.items() 
-                        if data.get("release_date") == latest_date]
-        
+        candidate_models = [
+            (name, data)
+            for name, data in models_dict.items()
+            if data.get("release_date") == latest_date
+        ]
+
         # Apply preferences based on dtype, INT4 > FP16 in preference.
         chosen = None
-        
+
         for name, data in candidate_models:
             dtype = data.get("dtype", "").lower()
             if "int4" in dtype or "4bit" in dtype:
                 chosen = (name, data)
                 break
-        
+
         # Fallback to first candidate
         if not chosen:
             chosen = candidate_models[0]
-        
+
         return {
             "model_name": chosen[0],
             "model": chosen[1],

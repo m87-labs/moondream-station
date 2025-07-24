@@ -38,22 +38,7 @@ def download_file(url, out_path, logger):
 
 
 def is_macos():
-    """Check if the current platform is macOS.
-
-    Returns:
-        bool: True if running on macOS, False otherwise.
-    """
     return platform.system().lower().startswith("darwin")
-
-
-def is_ubuntu() -> bool:
-    if platform.system().lower() != "linux":
-        return False
-    try:
-        import distro
-    except ModuleNotFoundError:
-        return False
-    return distro.id() == "Linux"
 
 
 def is_linux() -> bool:
@@ -81,7 +66,7 @@ def get_app_dir(platform: str = None) -> str:
             os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
         )
     else:
-        raise ValueError("Can only get app_dir for macOS and Ubuntu")
+        raise ValueError("Can only get app_dir for macOS and linux")
 
     app_dir = app_dir / "MoondreamStation"
     os.makedirs(app_dir, exist_ok=True)

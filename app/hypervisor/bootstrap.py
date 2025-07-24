@@ -19,19 +19,21 @@ from misc import download_file, check_platform, get_app_dir, get_component_versi
 
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
-    MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-MacOSX-arm64.sh"
+    MINIFORGE_URL = "https://depot.moondream.ai/station/Miniforge3-MacOSX-arm64.sh"
+    HYPERVISOR_TAR_URL = (
+        f"https://depot.moondream.ai/station/md_station_hypervisor.tar.gz"
+    )
 elif PLATFORM == "Linux":
-    MINIFORGE_MAC_URL = "https://depot.moondream.ai/station/Miniforge3-Linux-x86_64.sh"
-else:
-    sys  # Executable permissions are now handled in the code aboveOnly macOS and Ubuntu are supported. Detected platform is {PLATFORM}")
+    MINIFORGE_URL = "https://depot.moondream.ai/station/Miniforge3-Linux-x86_64.sh"
+    HYPERVISOR_TAR_URL = (
+        f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
+    )
 
 PYTHON_VERSION = "3.10"
-BOOTSTRAP_VERSION = get_component_version(
-    "v0.0.2"
-)  # Default version, can be overridden by info.json
-HYPERVISOR_TAR_URL = (
-    f"https://depot.moondream.ai/station/md_station_hypervisor_ubuntu.tar.gz"
-)
+
+# Default version, can be overridden by info.json
+BOOTSTRAP_VERSION = get_component_version("v0.0.2")
+
 POSTHOG_PROJECT_API_KEY = "phc_8S71qk0L1WlphzX448tekgbnS1ut266W4J48k9kW0Cx"
 SSL_CERT_FILE = "SSL_CERT_FILE"
 
@@ -194,7 +196,7 @@ def setup_miniforge_if_needed(
     # Setup new Python installation
     logger.info(f"Setting up Python {python_version} in {version_dir}")
     os.makedirs(py_versions_dir, exist_ok=True)
-    setup_miniforge_installer(MINIFORGE_MAC_URL, version_dir, logger, python_version)
+    setup_miniforge_installer(MINIFORGE_URL, version_dir, logger, python_version)
     install_libvips_conda(version_dir, logger)
 
     return version_dir
@@ -625,7 +627,6 @@ def update_bootstrap(app_dir: str, logger: logging.Logger) -> bool:
         tar_path = os.path.join(download_dir, f"bootstrap_{bootstrap_version}.tar.gz")
 
         try:
-            # Download the bootstrap tarball
             logger.info(
                 f"Downloading bootstrap tarball from {bootstrap_url} to {tar_path}"
             )
@@ -634,7 +635,6 @@ def update_bootstrap(app_dir: str, logger: logging.Logger) -> bool:
             # Create extraction directory
             os.makedirs(download_dir, exist_ok=True)
 
-            # Extract the tarball
             logger.info(f"Extracting bootstrap archive to {download_dir}")
             with tarfile.open(tar_path, "r:gz") as tar:
                 tar.extractall(path=download_dir)
@@ -650,14 +650,12 @@ def update_bootstrap(app_dir: str, logger: logging.Logger) -> bool:
 
             logger.info(f"Found bootstrap executable at {bootstrap_exe}")
 
-            # Set executable permissions
             try:
                 os.chmod(bootstrap_exe, 0o755)
                 logger.info(f"Set executable permissions")
             except:
                 logger.info("Could not set executable permissions")
 
-            # Use the update_bootstrap.sh script to handle the update process
             update_script_path = os.path.join(app_dir, "update_bootstrap.sh")
             if not os.path.exists(update_script_path):
                 logger.error(f"Update script not found at {update_script_path}")
@@ -767,7 +765,6 @@ def main(verbose: bool = False, manifest_url: str = None):
     """
     start_time = time.time()
 
-    # Configure spinner based on arguments
     Spinner.enabled = not verbose
     Spinner.show_animation = not PLATFORM == "macOS"
 
@@ -802,8 +799,8 @@ def main(verbose: bool = False, manifest_url: str = None):
         if PLATFORM == "Linux":
             subprocess.run(
                 ["sudo", "apt", "update"],
-                check=True,  # raise if the command exits non-zero
-                text=True,  # decode stdout/stderr as text
+                check=True,
+                text=True,
             )
             subprocess.run(["sudo", "apt", "upgrade", "-y"], check=True, text=True)
 

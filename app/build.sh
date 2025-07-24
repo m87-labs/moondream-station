@@ -76,24 +76,24 @@ build_inference() {
     local SRC_DIR="../app/inference_client"
     local FILES=(main.py model_service.py requirements.txt)
 
-    local LIBPYTHON
-    LIBPYTHON=$(
-python - <<'PY'
-import os, sysconfig, pathlib, sys
-libdir = pathlib.Path(sysconfig.get_config_var("LIBDIR") or "")
-ver     = sysconfig.get_config_var("LDVERSION")          # e.g. 3.10
-wanted  = libdir / f"libpython{ver}.so.1.0"              # soname
-# fall back to the un-versioned file only if the soname is missing
-for p in (wanted, libdir / f"libpython{ver}.so"):
-    if p.exists():
-        # always *install* it under the soname so the boot-loader sees it
-        print(f"{p}{os.pathsep}libpython{ver}.so.1.0")
-        break
-else:
-    sys.stderr.write("ERROR: libpython with --enable-shared not found\n")
-    sys.exit(1)
-PY
-) || exit 1
+#     local LIBPYTHON
+#     LIBPYTHON=$(
+# python - <<'PY'
+# import os, sysconfig, pathlib, sys
+# libdir = pathlib.Path(sysconfig.get_config_var("LIBDIR") or "")
+# ver     = sysconfig.get_config_var("LDVERSION")          # e.g. 3.10
+# wanted  = libdir / f"libpython{ver}.so.1.0"              # soname
+# # fall back to the un-versioned file only if the soname is missing
+# for p in (wanted, libdir / f"libpython{ver}.so"):
+#     if p.exists():
+#         # always *install* it under the soname so the boot-loader sees it
+#         print(f"{p}{os.pathsep}libpython{ver}.so.1.0")
+#         break
+# else:
+#     sys.stderr.write("ERROR: libpython with --enable-shared not found\n")
+#     sys.exit(1)
+# PY
+# ) || exit 1
 
     PYI_ARGS="--onefile" 
 
