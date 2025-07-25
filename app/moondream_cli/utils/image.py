@@ -6,7 +6,7 @@ from io import BytesIO
 def load_image(image_path: str) -> Image.Image:
    """Load an image from a file path or URL."""
    if image_path.startswith(('http://', 'https://')):
-       response = requests.get(image_path)
+       response = requests.get(image_path, timeout=10)
        response.raise_for_status()
        return Image.open(BytesIO(response.content)).convert("RGB")
    
