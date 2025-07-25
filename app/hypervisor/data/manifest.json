@@ -41,7 +41,7 @@
             },
             "Moondream2-2025-3-27": {
                 "release_date": "2025-03-27",
-                "model_id":"vikhyatk/moondream2",
+                "model_id": "vikhyatk/moondream2",
                 "revision": "2025-03-27",
                 "notes": "Our previous model",
                 "model_size": "1.93B",
