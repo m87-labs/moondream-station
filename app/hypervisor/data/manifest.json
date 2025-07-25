@@ -29,7 +29,7 @@
             },
             "Moondream2-2025-04-14": {
                 "release_date": "2025-04-14",
-                "model_id":"vikhyatk/moondream2",
+                "model_id": "vikhyatk/moondream2",
                 "revision": "2025-04-14",
                 "notes": "Our latest Float16 Moondream",
                 "model_size": "1.93B",
