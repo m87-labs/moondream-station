@@ -55,7 +55,7 @@
     },
     "inference_clients": {
         "v0.0.3": {
-            "date": "2025-05-",
+            "date": "2025-05-01",
             "url": "https://depot.moondream.ai/station/md_station_inference_bootstrap_ubuntu_int4.tar.gz"
         },
         "v0.0.1": {
