@@ -385,44 +385,37 @@ def run_main_loop(
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, handler)
 
-    while return_code == 0:
-        if not os.path.isfile(main_py):
-            logger.warning(f"'{main_py}' not found.")
-            return
-        cmd = [python_bin, main_py]
-        if manifest_url:
-            cmd.extend(["--manifest-url", manifest_url])
+    if not os.path.isfile(main_py):
+        logger.warning(f"'{main_py}' not found.")
+        return
+    cmd = [python_bin, main_py]
+    if manifest_url:
+        cmd.extend(["--manifest-url", manifest_url])
 
-        logger.info(f"Launching {main_py} via {python_bin}")
-        logger.info(f"Command to execute: {' '.join(cmd)}")
+    logger.info(f"Launching {main_py} via {python_bin}")
+    logger.info(f"Command to execute: {' '.join(cmd)}")
 
-        proc = subprocess.Popen(cmd)
-        return_code = proc.wait()
-        logger.warning(f"{main_py} exited with code {return_code}; restarting in 5s.")
-        if return_code != 0:
+    proc = subprocess.Popen(cmd)
+    return_code = proc.wait()
+    logger.info(f"{main_py} exited with code {return_code}")
+
+    if return_code == 99:
+        print("Bootstrap update requested. Starting update process...")
+        try:
+            update_success = update_bootstrap(app_dir, logger)
+            if not update_success:
+                if PLATFORM == "macOS":
+                    print("Update process failed. Continuing with current version.")
+                else:
+                    print("⚠️ Restart Moondream Station for update to take effect")
+        except Exception as e:
+            logger.info(f"Update process failed with exception: {e}")
+            import traceback
+
+            logger.info(f"Exception details: {traceback.format_exc()}")
             print(
-                f"Moondream Station exited with code {return_code}; restarting in 5 seconds..."
+                "Update process encountered an error. Continuing with current version."
             )
-
-        if return_code == 99:
-            print("Bootstrap update requested. Starting update process...")
-            try:
-                update_success = update_bootstrap(app_dir, logger)
-                if not update_success:
-                    if PLATFORM == "macOS":
-                        print("Update process failed. Continuing with current version.")
-                    else:
-                        print("⚠️ Restart Moondream Station for update to take effect")
-            except Exception as e:
-                logger.error(f"Update process failed with exception: {e}")
-                import traceback
-
-                logger.error(f"Exception details: {traceback.format_exc()}")
-                print(
-                    "Update process encountered an error. Continuing with current version."
-                )
-
-        time.sleep(5)
 
 
 def download_and_extract_hypervisor(app_dir: str, logger: logging.Logger) -> bool:
