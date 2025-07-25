@@ -9,8 +9,6 @@ from misc import parse_version, parse_date, download_file, check_platform
 PLATFORM = check_platform()
 if PLATFORM == "macOS":
     MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest.json"
-    print("My platofrm is ", PLATFORM)
-    print("manifest url", MANIFEST_URL)
 else:
     MANIFEST_URL = "https://depot.moondream.ai/station/md_station_manifest_ubuntu.json"
 MODEL_SIZE = "2b"
