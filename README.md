@@ -101,6 +101,7 @@ For more information on our clients visit: [Python](https://pypi.org/project/moo
 ### Docker Inference only Server
 To run an inference only server in a docker container. The following command builds and runs the inference only docker container:
 ```
+cd app/
 make inference-server
 ```
 
