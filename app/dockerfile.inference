@@ -30,9 +30,7 @@ RUN ln -sf /usr/local/bin/pip3.10 /usr/bin/pip
 WORKDIR /app
 RUN pip install pyinstaller distro certifi
 
-
-COPY build.sh /app/build.sh
-COPY ./inference_client /app/moondream-station/app/inference_client
+COPY . /app/moondream-station/app
 WORKDIR /app/moondream-station/app/
 
 RUN chmod +x build.sh
