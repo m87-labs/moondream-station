@@ -1,0 +1,46 @@
+FROM ubuntu:24.04
+
+
+WORKDIR /tmp
+RUN apt update && apt install -y build-essential zlib1g-dev libncurses5-dev libgdbm-dev libnss3-dev libssl-dev libreadline-dev libffi-dev libsqlite3-dev wget libbz2-dev git
+RUN wget https://www.python.org/ftp/python/3.10.12/Python-3.10.12.tgz
+RUN tar -xf Python-3.10.12.tgz
+
+WORKDIR /tmp/Python-3.10.12
+
+RUN ./configure --enable-shared --enable-optimizations --prefix=/usr/local
+RUN make -j 10
+RUN make altinstall
+
+RUN echo '/usr/local/lib' > /etc/ld.so.conf.d/python310.conf
+RUN ldconfig
+
+RUN ln -sf /usr/local/bin/python3.10 /usr/bin/python3.10
+RUN ln -sf /usr/local/bin/python3.10 /usr/bin/python3
+RUN rm -f /usr/bin/python
+RUN ln -sf /usr/local/bin/python3.10 /usr/bin/python
+
+RUN export PATH=/usr/local/bin:\$PATH
+RUN echo 'export PATH=/usr/local/bin:\$PATH' >> ~/.bashrc
+
+RUN /usr/local/bin/python3.10 -m ensurepip
+RUN ln -sf /usr/local/bin/pip3.10 /usr/bin/pip3
+RUN ln -sf /usr/local/bin/pip3.10 /usr/bin/pip
+
+WORKDIR /app
+RUN pip install pyinstaller distro certifi
+
+
+COPY build.sh /app/build.sh
+COPY ./inference_client /app/moondream-station/app/inference_client
+WORKDIR /app/moondream-station/app/
+
+RUN chmod +x build.sh
+RUN ./build.sh dev ubuntu --build-clean --inference=2025-06-21
+
+WORKDIR /app/moondream-station/app/inference_client
+
+RUN pip install -r requirements.txt
+EXPOSE 20200:20200
+
+CMD ["python3", "/app/moondream-station/app/inference_client/main.py", "--revision=2025-06-21"]

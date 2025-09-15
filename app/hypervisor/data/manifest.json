@@ -15,6 +15,20 @@
     },
     "models": {
         "2b": {
+            "2b": {
+                "Moondream2-2025-06-21": {
+                    "release_date": "2025-06-21",
+                    "model_id": "vikhyatk/moondream2",
+                    "revision": "2025-06-21",
+                    "notes": "Our latest Float16 Moondream",
+                    "model_size": "1.93B",
+                    "dtype": "fp16",
+                    "support_osx": true,
+                    "support_ubuntu": true,
+                    "support_windows": false,
+                    "inference_client": "v0.0.1"
+                }
+            },
             "Moondream2-INT4": {
                 "release_date": "2025-05-21",
                 "model_id": "moondream/moondream-2b-2025-04-14-4bit",
