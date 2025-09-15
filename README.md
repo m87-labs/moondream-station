@@ -98,6 +98,16 @@ print("Answer:", answer)
 ```
 For more information on our clients visit: [Python](https://pypi.org/project/moondream/), [Node](https://www.npmjs.com/package/moondream), [Quick Start](https://moondream.ai/c/docs/quickstart)
 
+### Docker Inference only Server
+To run an inference only server in a docker container. The following command builds and runs the inference only docker container:
+```
+cd app/
+make inference-server
+```
+
+Make sure you have the build dependencies installed before running the command (make).
+*(Note: on ubuntu, you can install make with `sudo apt install build-essential`)*
+
 ## Administrative Commands
 
 Access administrative functions using the `admin` command:
