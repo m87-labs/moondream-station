@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from packaging.version import Version
 
 from .config import NETWORK_TIMEOUT, DOWNLOAD_TIMEOUT
+from .torch_installer import TorchInstaller
 
 
 class BackendInfo(BaseModel):
@@ -220,7 +221,7 @@ class ManifestManager:
             return False
 
     def _install_requirements(self, requirements_url: str) -> bool:
-        """Check if all requirements are installed, install missing ones"""
+        """Check if all requirements are installed, install missing ones with system-aware PyTorch installation"""
         try:
             # Get requirements content
             if requirements_url.startswith(("http://", "https://")):
@@ -231,7 +232,24 @@ class ManifestManager:
                 with open(requirements_url) as f:
                     requirements_content = f.read()
 
-            # Parse requirements
+            # Check if torch is in requirements - use system-aware installation
+            has_torch = False
+            for line in requirements_content.split('\n'):
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                # Extract package name more carefully
+                package_name = line.split('>=')[0].split('==')[0].split('<')[0].split(';')[0].strip()
+                if package_name.lower() == 'torch':
+                    has_torch = True
+                    break
+            
+            if has_torch:
+                # Use system-aware PyTorch installer
+                torch_installer = TorchInstaller()
+                return torch_installer.install_torch_requirements(requirements_content)
+            
+            # For non-torch requirements, use standard installation
             missing_requirements = []
             for line in requirements_content.strip().split('\n'):
                 line = line.strip()
