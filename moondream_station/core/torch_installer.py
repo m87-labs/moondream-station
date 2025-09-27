@@ -97,13 +97,15 @@ class TorchInstaller:
         version_parts = cuda_version.split('.')
         major, minor = int(version_parts[0]), int(version_parts[1])
         
-        # Map to available PyTorch CUDA versions
-        if major >= 12 and minor >= 4:
-            return "12.4"
-        elif major >= 12 and minor >= 1:
-            return "12.1"
+        # Map to available PyTorch CUDA versions (newest first)
+        if major >= 13:
+            return "12.4"  # CUDA 13.0+ uses PyTorch cu124 build (future-proofing)
+        elif major >= 12 and minor >= 4:
+            return "12.4"  # CUDA 12.4+ uses PyTorch cu124 build
+        elif major >= 12:
+            return "12.1"  # CUDA 12.0-12.3 uses PyTorch cu121 build
         elif major >= 11 and minor >= 8:
-            return "11.8"
+            return "11.8"  # CUDA 11.8+ uses PyTorch cu118 build
         else:
             return "11.8"  # Fallback to oldest supported
     

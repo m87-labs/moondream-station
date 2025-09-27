@@ -36,8 +36,9 @@ print(f"Recommended install: {capabilities['recommended_install']}")
 
 ### CUDA Version Mapping
 The installer maps detected CUDA versions to PyTorch-compatible versions:
-- CUDA 12.4+ → PyTorch cu124
-- CUDA 12.1+ → PyTorch cu121  
+- CUDA 13.0+ → PyTorch cu124 (future-proofing)
+- CUDA 12.4+ → PyTorch cu124 (supports 12.4, 12.8, 12.9)
+- CUDA 12.0-12.3 → PyTorch cu121  
 - CUDA 11.8+ → PyTorch cu118
 
 ## Integration with Backend System
@@ -95,6 +96,9 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 
 # Force CUDA 12.1 installation
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# Force CUDA 12.4+ installation (for CUDA 12.4, 12.8, 12.9)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 ```
 
 ## Architecture Benefits
