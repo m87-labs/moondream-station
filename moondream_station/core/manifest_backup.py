@@ -221,7 +221,7 @@ class ManifestManager:
             return False
 
     def _install_requirements(self, requirements_url: str) -> bool:
-        """Check if all requirements are installed, install missing ones with system-aware PyTorch installation"""
+        """Check if all requirements are installed, install missing ones"""
         try:
             # Get requirements content
             if requirements_url.startswith(("http://", "https://")):
@@ -232,29 +232,7 @@ class ManifestManager:
                 with open(requirements_url) as f:
                     requirements_content = f.read()
 
-            # Check if torch is in requirements - use system-aware installation
-            has_torch = False
-            for line in requirements_content.split('\n'):
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                # Extract package name more carefully
-                package_name = line.split('>=')[0].split('==')[0].split('<')[0].split(';')[0].strip()
-                if package_name.lower() == 'torch':
-                    has_torch = True
-                    break
-            
-            if has_torch:
-                # Use system-aware PyTorch installer with improved error handling
-                torch_installer = TorchInstaller()
-                result = torch_installer.install_torch_requirements(requirements_content)
-                if not result.success:
-                    logger.error(f"PyTorch installation failed: {result.message}")
-                    if result.details:
-                        logger.error(f"Details: {result.details}")
-                return result.success
-            
-            # For non-torch requirements, use standard installation
+            # Parse requirements
             missing_requirements = []
             for line in requirements_content.strip().split('\n'):
                 line = line.strip()
