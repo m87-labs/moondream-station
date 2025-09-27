@@ -51,6 +51,9 @@ class TestIntegration:
         )
         
         installer = TorchInstaller()
+        # Ensure fresh capability detection by clearing cache
+        installer._capability_cache = None
+        installer._cache_file = self.temp_dir / "test_capabilities.json"
         result = installer.install_torch_requirements(requirements_content)
         
         assert result.success is True
@@ -74,6 +77,9 @@ class TestIntegration:
         requirements_content = "torch>=2.7.0\nnumpy>=1.21.0"
         
         installer = TorchInstaller()
+        # Ensure fresh capability detection by clearing cache
+        installer._capability_cache = None
+        installer._cache_file = self.temp_dir / "test_capabilities.json"
         result = installer.install_torch_requirements(requirements_content)
         
         assert result.success is True
@@ -147,6 +153,9 @@ class TestIntegration:
         requirements_content = "torch>=2.7.0"
         
         installer = TorchInstaller()
+        # Ensure fresh capability detection by clearing cache
+        installer._capability_cache = None
+        installer._cache_file = self.temp_dir / "test_capabilities.json"
         result = installer.install_torch_requirements(requirements_content)
         
         assert result.success is False
@@ -160,21 +169,25 @@ class TestIntegration:
         """Test macOS MPS detection integration"""
         mock_system.return_value = "Darwin"
         
-        installer = TorchInstaller()
-        installer.is_mac = True
+        # Create installer with mocked platform
+        with patch('moondream_station.core.torch_installer.platform.system', return_value="Darwin"):
+            installer = TorchInstaller()
+            # Ensure fresh capability detection by clearing cache
+            installer._capability_cache = None
+            installer._cache_file = self.temp_dir / "test_capabilities.json"
         
-        # Mock Apple Silicon detection
-        mock_subprocess.side_effect = [
-            Mock(returncode=0, stdout="Apple M2 Pro", stderr=""),
-            Mock(returncode=0, stdout="13.2.1", stderr=""),
-            # pip install with CPU (MPS uses CPU wheel)
-            Mock(returncode=0, stdout="Successfully installed torch\n", stderr="")
-        ]
-        
-        capabilities = installer.detect_system_capabilities()
-        
-        assert capabilities["mps_available"] is True
-        assert capabilities["recommended_install"] == "cpu"
+            # Mock Apple Silicon detection
+            mock_subprocess.side_effect = [
+                Mock(returncode=0, stdout="Apple M2 Pro", stderr=""),
+                Mock(returncode=0, stdout="13.2.1", stderr=""),
+                # pip install with CPU (MPS uses CPU wheel)
+                Mock(returncode=0, stdout="Successfully installed torch\n", stderr="")
+            ]
+            
+            capabilities = installer.detect_system_capabilities()
+            
+            assert capabilities["mps_available"] is True
+            assert capabilities["recommended_install"] == "cpu"
     
     def test_requirements_parsing_robustness(self):
         """Test robust requirements parsing with various formats"""

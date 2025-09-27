@@ -14,7 +14,6 @@ import contextlib
 from typing import Tuple, Optional, List, Dict, Any
 from pathlib import Path
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 logger = logging.getLogger(__name__)
@@ -311,20 +310,29 @@ class TorchInstaller:
             torch_req = None
             other_requirements = []
             
+            # Separate torch from other requirements using parsed requirements
+            for req in parsed_reqs:
+                if req.name.lower() == 'torch':
+                    torch_req = req
+                else:
+                    # Convert back to string for other requirements
+                    other_requirements.append(str(req))
+            
+            # Also handle lines that couldn't be parsed by Requirement()
+            # but might still be valid pip install arguments
             for line in requirements_content.strip().split('\n'):
                 line = line.strip()
                 if not line or line.startswith('#') or line.startswith('-'):
                     continue
-                    
                 try:
+                    # Check if this line was already processed
                     req = Requirement(line)
-                    if req.name.lower() == 'torch':
-                        torch_req = req
-                    else:
-                        other_requirements.append(line)
+                    # Already handled above
                 except Exception:
-                    # If parsing fails, include in other requirements
-                    other_requirements.append(line)
+                    # If parsing fails, include in other requirements as fallback
+                    # but skip if it looks like torch (already handled above)
+                    if not line.lower().startswith('torch'):
+                        other_requirements.append(line)
             
             # Install PyTorch with system detection
             if torch_req:
