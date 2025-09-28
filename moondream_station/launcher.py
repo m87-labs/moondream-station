@@ -8,6 +8,7 @@ import platform
 import contextlib
 import requests
 from pathlib import Path
+from typing import Optional
 
 import posthog
 
@@ -39,8 +40,9 @@ class MoondreamStationLauncher:
             console=self.console,
             transient=True,
         ) as progress:
-            progress.add_task(description=message, total=None)
-            yield
+            task = progress.add_task(description=message, total=None)
+            # Yield the progress object so we can update it
+            yield progress, task
 
     def _setup_analytics(self):
         """Setup analytics from manifest if available"""
@@ -137,7 +139,14 @@ class MoondreamStationLauncher:
 
     def _venv_exists(self) -> bool:
         """Check if venv exists and is valid"""
-        return self.python_exe.exists() and self.python_exe.is_file()
+        if not (self.python_exe.exists() and self.python_exe.is_file()):
+            return False
+
+        # Check that pip is available in the venv
+        result = subprocess.run(
+            [str(self.python_exe), "-m", "pip", "--version"], capture_output=True
+        )
+        return result.returncode == 0
 
     def _create_venv(self):
         """Create virtual environment"""
@@ -147,16 +156,36 @@ class MoondreamStationLauncher:
 
         if self.venv_dir.exists():
             import shutil
-
             shutil.rmtree(self.venv_dir)
 
         try:
             with self.spinner("Setting up Moondream Station environment"):
+                result = subprocess.run(
+                    ["uv", "venv", str(self.venv_dir)],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    # UV doesn't install pip by default, but we need it as fallback
+                    subprocess.run(
+                        ["uv", "pip", "install", "--python", str(self.python_exe), "pip"],
+                        capture_output=True
+                    )
+                    self._track("env_setup_success", {"method": "uv"})
+                    return
+        except FileNotFoundError:
+            pass
+
+        try:
+            with self.spinner("Setting up Moondream Station environment"):
                 venv.create(self.venv_dir, with_pip=True)
-            self._track("env_setup_success")
+            self._track("env_setup_success", {"method": "venv"})
         except Exception as e:
             self._track("env_setup_failed", {"error": str(e)})
-            raise
+            rprint(f"\n[red]❌ Failed to create virtual environment[/red]\n")
+            rprint(f"{str(e)}")
+            rprint("\n[dim]After installing any missing packages, run moondream-station again.[/dim]")
+            sys.exit(1)
 
     def _install_requirements(self):
         """Install required packages from requirements.txt"""
@@ -165,50 +194,86 @@ class MoondreamStationLauncher:
         moondream_station_root = Path(__file__).parent
         requirements_file = moondream_station_root / "requirements.txt"
 
-        cmd = [
-            str(self.python_exe),
-            "-m",
-            "pip",
-            "install",
-            "-r",
-            str(requirements_file),
+        try:
+            result = subprocess.run(
+                ["uv", "pip", "install", "--python", str(self.python_exe), "-r", str(requirements_file)],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                self._track("requirements_install_success", {"tool": "uv"})
+                return
+        except FileNotFoundError:
+            pass
+
+        cmd = [str(self.python_exe), "-m", "pip", "install", "-r", str(requirements_file)]
+
+        import time
+        import random
+
+        messages = [
+            "Installing moondream-station requirements",
+            "Setting up dependencies",
+            "Downloading packages",
+            "Configuring environment",
+            "Processing requirements",
+            "Installing components",
+            "Preparing packages",
+            "Building dependencies",
         ]
 
-        with self.spinner("Installing moondream-station requirements"):
-            result = subprocess.run(cmd, capture_output=True, text=True)
+        process = subprocess.Popen(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
 
-        if result.returncode != 0:
+        while process.poll() is None:
+            msg = random.choice(messages)
+            wait_time = random.randint(3, 9)
+            with self.spinner(msg):
+                time.sleep(wait_time)
+
+        stdout, stderr = process.communicate()
+
+        if process.returncode != 0:
             self._track(
                 "requirements_install_failed",
-                {"error": result.stderr, "returncode": result.returncode},
+                {"error": stderr, "returncode": process.returncode, "tool": "pip"},
             )
-            rprint(f"[red]❌ Failed to install packages: {result.stderr}[/red]")
+            rprint(f"[red]❌ Failed to install packages: {stderr}[/red]")
             sys.exit(1)
         else:
-            self._track("requirements_install_success")
+            self._track("requirements_install_success", {"tool": "pip"})
 
     def _install_moondream_station(self):
         """Install moondream-station package"""
+        moondream_station_root = Path(__file__).parent.parent
+
         if self.dev_mode:
-            # Development mode - install from local source
-            moondream_station_root = Path(__file__).parent.parent
-            cmd = [
-                str(self.python_exe),
-                "-m",
-                "pip",
-                "install",
-                "-e",
-                str(moondream_station_root),
-            ]
+            try:
+                result = subprocess.run(
+                    ["uv", "pip", "install", "--python", str(self.python_exe), "-e", str(moondream_station_root)],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    return
+            except FileNotFoundError:
+                pass
+
+            cmd = [str(self.python_exe), "-m", "pip", "install", "-e", str(moondream_station_root)]
         else:
-            # Production mode - install from PyPI
-            cmd = [
-                str(self.python_exe),
-                "-m",
-                "pip",
-                "install",
-                "moondream-station",
-            ]
+            try:
+                result = subprocess.run(
+                    ["uv", "pip", "install", "--python", str(self.python_exe), "moondream-station"],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    return
+            except FileNotFoundError:
+                pass
+
+            cmd = [str(self.python_exe), "-m", "pip", "install", "moondream-station"]
 
         with self.spinner("Installing moondream-station package"):
             result = subprocess.run(cmd, capture_output=True, text=True)
@@ -261,6 +326,60 @@ class MoondreamStationLauncher:
             )
             rprint(f"[yellow]⚠️  Could not install backend requirements: {e}[/yellow]")
 
+    def _get_stored_cuda_version(self) -> Optional[str]:
+        """Get the CUDA version that was used for installation"""
+        cuda_file = self.venv_dir / ".cuda_version"
+        if cuda_file.exists():
+            return cuda_file.read_text().strip()
+        return None
+
+    def _store_cuda_version(self, cuda_version: Optional[str]):
+        """Store the CUDA version used for installation"""
+        cuda_file = self.venv_dir / ".cuda_version"
+        cuda_file.write_text(cuda_version or "none")
+
+    def _detect_cuda_version(self) -> Optional[str]:
+        """Detect CUDA version on Windows/Linux systems"""
+        # Only check for CUDA on Windows and Linux
+        if sys.platform == "darwin":  # macOS
+            return None
+
+        try:
+            # Try to run nvidia-smi to detect CUDA
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                # nvidia-smi works, now get CUDA version
+                cuda_result = subprocess.run(
+                    ["nvidia-smi"], capture_output=True, text=True, timeout=5
+                )
+
+                # Parse CUDA version from output (looks for "CUDA Version: 11.8" pattern)
+                import re
+
+                match = re.search(r"CUDA Version:\s*(\d+\.\d+)", cuda_result.stdout)
+                if match:
+                    cuda_version = match.group(1)
+                    # Map CUDA version to PyTorch index (12.x -> cu121, 11.8 -> cu118, etc.)
+                    major, minor = cuda_version.split(".")
+                    if int(major) >= 12:
+                        return "121"  # CUDA 12.x uses cu121
+                    elif major == "11" and int(minor) >= 8:
+                        return "118"  # CUDA 11.8+ uses cu118
+                    elif major == "11":
+                        return "117"  # CUDA 11.7 and below
+                    else:
+                        return None  # Unsupported CUDA version
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            pass
+
+        return None  # No CUDA or detection failed
+
     def _install_requirements_from_url(self, requirements_url: str):
         """Install requirements from URL or local path"""
         try:
@@ -283,14 +402,82 @@ class MoondreamStationLauncher:
                 f.write(requirements_content)
                 temp_path = f.name
 
-            cmd = [str(self.python_exe), "-m", "pip", "install", "-r", temp_path]
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            # Check if torch is in requirements and build appropriate args
+            extra_args = []
+            if any(
+                pkg.startswith(("torch", "torchvision", "torchaudio"))
+                for pkg in requirements_content.lower().split("\n")
+            ):
+                current_cuda = self._detect_cuda_version()
+                stored_cuda = self._get_stored_cuda_version()
 
+                # Check if CUDA version changed
+                if stored_cuda is not None and stored_cuda != (current_cuda or "none"):
+                    rprint(
+                        f"[yellow]⚠️  CUDA version changed from {stored_cuda} to {current_cuda or 'none'}[/yellow]"
+                    )
+                    rprint(
+                        "[yellow]⚠️  Consider running 'reset' command to reinstall with correct PyTorch version[/yellow]"
+                    )
+
+                # Store current CUDA version for next run
+                self._store_cuda_version(current_cuda)
+
+                if current_cuda:
+                    extra_args = ["--extra-index-url", f"https://download.pytorch.org/whl/cu{current_cuda}"]
+                    rprint(
+                        f"[green]✓ Detected CUDA, installing PyTorch with CUDA {current_cuda} support[/green]"
+                    )
+                elif sys.platform != "darwin":
+                    extra_args = ["--extra-index-url", "https://download.pytorch.org/whl/cpu"]
+                    rprint(
+                        "[yellow]⚠️  No CUDA detected, installing CPU-only PyTorch[/yellow]"
+                    )
+
+            # Try uv first
+            try:
+                cmd = ["uv", "pip", "install", "--python", str(self.python_exe), "-r", temp_path] + extra_args
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode == 0:
+                    Path(temp_path).unlink()
+                    return
+            except FileNotFoundError:
+                pass
+
+            # Fallback to pip
+            cmd = [str(self.python_exe), "-m", "pip", "install", "-r", temp_path] + extra_args
+
+            # Run with random message updates
+            import time
+            import random
+
+            messages = [
+                "Installing backend requirements",
+                "Setting up ML dependencies",
+                "Downloading model libraries",
+                "Configuring backend",
+                "Processing dependencies",
+                "Installing frameworks",
+                "Preparing backend packages",
+                "Building ML components",
+            ]
+
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+            )
+
+            while process.poll() is None:
+                msg = random.choice(messages)
+                wait_time = random.randint(3, 9)
+                with self.spinner(msg):
+                    time.sleep(wait_time)
+
+            stdout, stderr = process.communicate()
             Path(temp_path).unlink()
 
-            if result.returncode != 0:
+            if process.returncode != 0:
                 rprint(
-                    f"[yellow]⚠️  Some backend requirements failed to install: {result.stderr}[/yellow]"
+                    f"[yellow]⚠️  Some backend requirements failed to install: {stderr}[/yellow]"
                 )
 
         except Exception as e:
