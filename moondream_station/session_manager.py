@@ -1,4 +1,5 @@
 import time
+import requests
 from typing import Dict, Any, Optional, List
 from rich.panel import Panel
 
@@ -133,8 +134,6 @@ class SessionManager:
     def _get_service_stats(self) -> Optional[Dict[str, Any]]:
         try:
             port = self.repl.config.get("service_port", SERVICE_PORT)
-            import requests
-
             response = requests.get(f"http://localhost:{port}/v1/stats", timeout=2)
             return response.json()
         except:

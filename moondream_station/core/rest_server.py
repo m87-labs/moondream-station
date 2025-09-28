@@ -221,8 +221,6 @@ class RestServer:
             self.server_thread = Thread(target=self._run_server, daemon=True)
             self.server_thread.start()
 
-            import time
-
             time.sleep(1)
 
             return self.is_running()

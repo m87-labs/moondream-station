@@ -1,4 +1,6 @@
 from typing import List
+import shutil
+from pathlib import Path
 from rich import print as rprint
 from rich.panel import Panel
 from rich.markdown import Markdown
@@ -455,9 +457,6 @@ class CommandHandlers:
 
     def reset(self, args: List[str]):
         """Reset moondream-station by deleting all app data"""
-        import shutil
-        from pathlib import Path
-
         config_dir = Path(self.repl.config.config_dir)
 
         if not config_dir.exists():

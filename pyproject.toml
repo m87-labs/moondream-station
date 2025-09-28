@@ -19,6 +19,7 @@ dependencies = [
     "requests>=2.25",
     "rich>=13.0",
     "posthog>=3.0.0",
+    "prompt-toolkit>=3.0.0",
 ]
 
 [project.scripts]
