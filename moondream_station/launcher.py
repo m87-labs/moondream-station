@@ -411,7 +411,7 @@ class MoondreamStationLauncher:
     def _prompt_cuda_version(self, detected_cuda: Optional[str]) -> list:
         """Prompt user to select CUDA version for PyTorch"""
         options = [
-            {"name": "CUDA 12.8", "cuda": ["12.8", "12.9", "12.10"], "url": None},
+            {"name": "CUDA 12.8", "cuda": ["12.8", "12.9", "12.10"], "url": "https://download.pytorch.org/whl/cu128"},
             {"name": "CUDA 12.6", "cuda": ["12.6", "12.7"], "url": "https://download.pytorch.org/whl/cu126"},
             {"name": "CUDA 12.4", "cuda": ["12.4", "12.5"], "url": "https://download.pytorch.org/whl/cu124"},
             {"name": "CUDA 12.1", "cuda": ["12.1", "12.2", "12.3"], "url": "https://download.pytorch.org/whl/cu121"},

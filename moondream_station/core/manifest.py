@@ -75,7 +75,7 @@ class ManifestManager:
         """Save manifest data to cache"""
         try:
             cache_file = self._get_manifest_cache_file()
-            with open(cache_file, "w") as f:
+            with open(cache_file, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception:
             pass
@@ -104,10 +104,10 @@ class ManifestManager:
 
                 # Track successful manifest load
                 if analytics:
-                    analytics.track(
-                        "manifest_load_success",
-                        {"source": "fresh_fetch", "url": source},
-                    )
+                    analytics.track("manifest_load_success", {
+                        "source": "fresh_fetch",
+                        "url": source
+                    })
 
             except Exception as e:
                 # Network failed, try cache
@@ -115,26 +115,20 @@ class ManifestManager:
                 if data is None:
                     # No cache available
                     if analytics:
-                        analytics.track(
-                            "manifest_load_failed",
-                            {
-                                "source": "no_cache_available",
-                                "url": source,
-                                "error": str(e),
-                            },
-                        )
+                        analytics.track("manifest_load_failed", {
+                            "source": "no_cache_available",
+                            "url": source,
+                            "error": str(e)
+                        })
                     raise  # Re-raise original error
 
                 # Using cached version
                 if analytics:
-                    analytics.track(
-                        "manifest_load_cache_hit",
-                        {
-                            "source": "cache_fallback",
-                            "url": source,
-                            "network_error": str(e),
-                        },
-                    )
+                    analytics.track("manifest_load_cache_hit", {
+                        "source": "cache_fallback",
+                        "url": source,
+                        "network_error": str(e)
+                    })
 
                 # Using cached version silently
         else:
@@ -143,9 +137,10 @@ class ManifestManager:
                 data = json.load(f)
 
             if analytics:
-                analytics.track(
-                    "manifest_load_success", {"source": "local_file", "path": source}
-                )
+                analytics.track("manifest_load_success", {
+                    "source": "local_file",
+                    "path": source
+                })
 
         self._manifest = ManifestData(**data)
         return self._manifest
@@ -185,12 +180,8 @@ class ManifestManager:
 
         try:
             if backend_info.download_url.startswith(("http://", "https://")):
-                with tempfile.NamedTemporaryFile(
-                    suffix=".tar.gz", delete=False
-                ) as tmp_file:
-                    response = requests.get(
-                        backend_info.download_url, timeout=DOWNLOAD_TIMEOUT
-                    )
+                with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp_file:
+                    response = requests.get(backend_info.download_url, timeout=DOWNLOAD_TIMEOUT)
                     response.raise_for_status()
                     tmp_file.write(response.content)
                     tmp_path = tmp_file.name
@@ -243,13 +234,14 @@ class ManifestManager:
 
             # Parse requirements
             missing_requirements = []
-            for line in requirements_content.strip().split("\n"):
+            for line in requirements_content.strip().split('\n'):
                 line = line.strip()
-                if not line or line.startswith("#"):
+                if not line or line.startswith('#'):
                     continue
 
-                package_spec = line.split(";")[0].strip()
-                for op in ["==", ">=", "<=", "~=", ">", "<", "!="]:
+                # Extract package name (handle ==, >=, <=, ~=, etc.)
+                package_spec = line.split(';')[0].strip()  # Remove environment markers
+                for op in ['==', '>=', '<=', '~=', '>', '<', '!=']:
                     if op in package_spec:
                         package_name = package_spec.split(op)[0].strip()
                         break
@@ -264,16 +256,10 @@ class ManifestManager:
             if missing_requirements:
                 requirements_path = self.backends_dir / "requirements_temp.txt"
                 with open(requirements_path, "w") as f:
-                    f.write("\n".join(missing_requirements))
+                    f.write('\n'.join(missing_requirements))
 
-                pip_cmd = [
-                    sys.executable,
-                    "-m",
-                    "pip",
-                    "install",
-                    "-r",
-                    str(requirements_path),
-                ]
+                # Build pip command
+                pip_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)]
 
                 # Add PyTorch index URL if needed
                 has_torch = any(
@@ -303,20 +289,20 @@ class ManifestManager:
         """Check if a package is installed, handling import name differences"""
         # Map of pip package names to import names
         package_import_map = {
-            "pillow": "PIL",
-            "pyyaml": "yaml",
-            "pytorch": "torch",
-            "tensorflow-cpu": "tensorflow",
-            "tensorflow-gpu": "tensorflow",
-            "scikit-learn": "sklearn",
-            "beautifulsoup4": "bs4",
-            "python-dateutil": "dateutil",
-            "msgpack-python": "msgpack",
-            "protobuf": "google.protobuf",
-            "opencv-python": "cv2",
-            "opencv-python-headless": "cv2",
-            "python-dotenv": "dotenv",
-            "typing-extensions": "typing_extensions",
+            'pillow': 'PIL',
+            'pyyaml': 'yaml',
+            'pytorch': 'torch',
+            'tensorflow-cpu': 'tensorflow',
+            'tensorflow-gpu': 'tensorflow',
+            'scikit-learn': 'sklearn',
+            'beautifulsoup4': 'bs4',
+            'python-dateutil': 'dateutil',
+            'msgpack-python': 'msgpack',
+            'protobuf': 'google.protobuf',
+            'opencv-python': 'cv2',
+            'opencv-python-headless': 'cv2',
+            'python-dotenv': 'dotenv',
+            'typing-extensions': 'typing_extensions',
         }
 
         # Get import name
@@ -354,9 +340,7 @@ class ManifestManager:
             return None
 
         backend_info = self._manifest.backends[backend_id]
-        backend_path = (
-            self.backends_dir / backend_id / f"{backend_info.entry_module}.py"
-        )
+        backend_path = self.backends_dir / backend_id / f"{backend_info.entry_module}.py"
 
         try:
             spec = importlib.util.spec_from_file_location(backend_id, backend_path)
@@ -393,9 +377,7 @@ class ManifestManager:
             return None
 
         backend_info = self._manifest.backends[backend_id]
-        backend_path = (
-            self.backends_dir / backend_id / f"{backend_info.entry_module}.py"
-        )
+        backend_path = self.backends_dir / backend_id / f"{backend_info.entry_module}.py"
         worker_module_name = f"{backend_id}_worker_{worker_id}"
 
         try:
@@ -456,10 +438,7 @@ class ManifestManager:
         for model_id, model_info in self._manifest.models.items():
             if model_info.is_default:
                 # Check OS compatibility
-                if (
-                    model_info.supported_os
-                    and current_os not in model_info.supported_os
-                ):
+                if model_info.supported_os and current_os not in model_info.supported_os:
                     continue
                 return model_id
         return None
