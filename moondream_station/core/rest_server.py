@@ -197,7 +197,7 @@ class RestServer:
 
         return kwargs
 
-    def start(self, host: str = "127.0.0.1", port: int = 2020) -> bool:
+    def start(self, host: str = "0.0.0.0", port: int = 2020) -> bool:
         if self.server_thread and self.server_thread.is_alive():
             return False
 
