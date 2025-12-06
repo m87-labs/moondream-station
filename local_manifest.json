@@ -8,6 +8,26 @@
     "posthog_host": "https://us.i.posthog.com"
   },
   "models": {
+    "moondream-3-preview-orchard": {
+      "name": "Moondream 3 Preview",
+      "description": "Vision-language model for image understanding and analysis",
+      "backend": "orchard_backend",
+      "args": {
+        "backend": "orchard"
+      },
+      "system_requirements": {
+        "RAM": "16GB minimum",
+        "GPU": "Apple Silicon (M1/M2/M3/M4)",
+        "Storage": "10GB available"
+      },
+      "is_default": false,
+      "supported_os": [
+        "darwin"
+      ],
+      "supported_arch": [
+        "arm64"
+      ]
+    },
     "moondream-3-preview": {
       "name": "Moondream 3 Preview",
       "description": "Vision-language model for image understanding and analysis",
@@ -46,6 +66,19 @@
     }
   },
   "backends": {
+    "orchard_backend": {
+      "name": "Orchard Backend (Apple Silicon)",
+      "download_url": "backends/orchard",
+      "entry_module": "backend",
+      "functions": [
+        "caption",
+        "query",
+        "detect",
+        "point"
+      ],
+      "version": "1.0.0",
+      "min_version": "0.1.0"
+    },
     "moondream_backend": {
       "name": "Moondream Backend (Full)",
       "download_url": "backends/mds_backend_0",
