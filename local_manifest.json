@@ -12,15 +12,20 @@
       "name": "Moondream 3 Preview",
       "description": "Vision-language model for image understanding and analysis",
       "backend": "orchard_backend",
-      "args": {},
+      "args": {
+        "backend": "orchard"
+      },
       "system_requirements": {
         "RAM": "16GB minimum",
         "GPU": "Apple Silicon (M1/M2/M3/M4)",
         "Storage": "10GB available"
       },
-      "is_default": true,
+      "is_default": false,
       "supported_os": [
         "darwin"
+      ],
+      "supported_arch": [
+        "arm64"
       ]
     },
     "moondream-3-preview": {

@@ -128,7 +128,8 @@ def query(
     Args:
         image_url: Base64-encoded image data URL.
         question: The question to answer.
-        stream: Ignored. Orchard streams internally and aggregates.
+        stream: Accepted for API compatibility but not used. Orchard always
+            streams internally and returns aggregated results.
         reasoning: If True, includes reasoning trace with grounding data.
         **kwargs: Additional parameters (temperature, etc.)
 
@@ -136,6 +137,7 @@ def query(
         {"answer": str} or {"answer": str, "reasoning": {...}} if reasoning=True.
         {"error": str} on failure.
     """
+    del stream  # Unused - Orchard streams internally
     if not image_url or not question:
         return {"error": "image_url and question are required"}
 
@@ -151,6 +153,7 @@ def query(
 def detect(
     image_url: str | None = None,
     object: str | None = None,
+    obj: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
@@ -159,19 +162,22 @@ def detect(
     Args:
         image_url: Base64-encoded image data URL.
         object: Object class to detect (e.g., "dog", "car").
+        obj: Alias for object (backward compatibility).
         **kwargs: Additional parameters (temperature, etc.)
 
     Returns:
         {"objects": [{"x_min", "y_min", "x_max", "y_max"}, ...]}
         {"error": str} on failure.
     """
-    if not image_url or not object:
+    target_obj = object or obj
+    if not image_url or not target_obj:
         return {"error": "image_url and object are required"}
 
     try:
         client = _get_client()
         image = _load_image(image_url)
-        return client.detect(image, object=object, **kwargs)
+        result = client.detect(image, object=target_obj, **kwargs)
+        return {"objects": result.get("objects", [])}
     except Exception as e:
         logger.exception("Detect failed")
         return {"error": str(e)}
@@ -180,6 +186,7 @@ def detect(
 def point(
     image_url: str | None = None,
     object: str | None = None,
+    obj: str | None = None,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """
@@ -188,19 +195,21 @@ def point(
     Args:
         image_url: Base64-encoded image data URL.
         object: Object to locate (e.g., "eye", "face").
+        obj: Alias for object (backward compatibility).
         **kwargs: Additional parameters (temperature, etc.)
 
     Returns:
         {"points": [{"x": float, "y": float}, ...], "count": int}
         {"error": str} on failure.
     """
-    if not image_url or not object:
+    target_obj = object or obj
+    if not image_url or not target_obj:
         return {"error": "image_url and object are required"}
 
     try:
         client = _get_client()
         image = _load_image(image_url)
-        result = client.point(image, object=object, **kwargs)
+        result = client.point(image, object=target_obj, **kwargs)
         points = result.get("points", [])
         return {"points": points, "count": len(points)}
     except Exception as e:
