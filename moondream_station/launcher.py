@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import sys
 import subprocess
-import venv
 import json
 import uuid
 import platform
@@ -162,41 +161,23 @@ class MoondreamStationLauncher:
         if self.venv_dir.exists():
             shutil.rmtree(self.venv_dir)
 
-        try:
-            with self.spinner("Setting up Moondream Station environment"):
-                result = subprocess.run(
-                    ["uv", "venv", str(self.venv_dir)], capture_output=True, text=True
-                )
-                if result.returncode == 0:
-                    # UV doesn't install pip by default, but we need it as fallback
-                    subprocess.run(
-                        [
-                            "uv",
-                            "pip",
-                            "install",
-                            "--python",
-                            str(self.python_exe),
-                            "pip",
-                        ],
-                        capture_output=True,
-                    )
-                    self._track("env_setup_success", {"method": "uv"})
-                    return
-        except FileNotFoundError:
-            pass
-
-        try:
-            with self.spinner("Setting up Moondream Station environment"):
-                venv.create(self.venv_dir, with_pip=True)
-            self._track("env_setup_success", {"method": "venv"})
-        except Exception as e:
-            self._track("env_setup_failed", {"error": str(e)})
-            rprint(f"\n[red]❌ Failed to create virtual environment[/red]\n")
-            rprint(f"{str(e)}")
-            rprint(
-                "\n[dim]After installing any missing packages, run moondream-station again.[/dim]"
+        with self.spinner("Setting up Moondream Station environment"):
+            subprocess.run(
+                ["uv", "venv", "--python", "3.12", str(self.venv_dir)], check=True, capture_output=True, text=True
             )
-            sys.exit(1)
+            # UV doesn't install pip by default, but we need it as fallback
+            subprocess.run(
+                [
+                    "uv",
+                    "pip",
+                    "install",
+                    "--python",
+                    str(self.python_exe),
+                    "pip",
+                ],
+                capture_output=True,
+            )
+            self._track("env_setup_success", {"method": "uv"})
 
     def _install_requirements(self):
         """Install required packages from requirements.txt"""
