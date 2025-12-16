@@ -1,6 +1,6 @@
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional, Tuple, List, Dict, Any
+from typing import Optional, Tuple, List
 
 from .config import TextConfig
 from .attention import TextAttention, precompute_freqs_cis
@@ -44,10 +44,10 @@ class TextBlock(nn.Module):
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple] = None,
         cache_pos: int = 0,
-        kv_quant_config: Optional[Dict[str, Any]] = None,
+        kv_quant: bool = False,
     ) -> Tuple[mx.array, Tuple]:
         h = self.ln(x)
-        attn_out, new_cache = self.attn(h, freqs_cis, positions, mask, cache, cache_pos, kv_quant_config)
+        attn_out, new_cache = self.attn(h, freqs_cis, positions, mask, cache, cache_pos, kv_quant)
         mlp_out = self.mlp(h)
         out = x + attn_out + mlp_out
         return out, new_cache
@@ -75,14 +75,14 @@ class TextModel(nn.Module):
         mask: Optional[mx.array] = None,
         cache: Optional[List[Tuple]] = None,
         cache_pos: int = 0,
-        kv_quant_config: Optional[Dict[str, Any]] = None,
+        kv_quant: bool = False,
     ) -> Tuple[mx.array, List[Tuple]]:
         new_caches = []
         is_prefill = positions.shape[0] > 1
 
         for i, block in enumerate(self.blocks):
             block_cache = cache[i] if cache is not None else None
-            x, new_cache = block(x, self.freqs_cis, positions, mask, block_cache, cache_pos, kv_quant_config)
+            x, new_cache = block(x, self.freqs_cis, positions, mask, block_cache, cache_pos, kv_quant)
             new_caches.append(new_cache)
 
             if is_prefill and (i + 1) % 4 == 0:

@@ -1,6 +1,6 @@
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple
 
 
 def precompute_freqs_cis(dim: int, max_len: int, theta: float = 1500000.0) -> mx.array:
@@ -15,9 +15,9 @@ def precompute_freqs_cis(dim: int, max_len: int, theta: float = 1500000.0) -> mx
 def quantize_kv(
     k: mx.array,
     v: mx.array,
-    bits: int,
-    group_size: int,
-    mode: str,
+    bits: int = 4,
+    group_size: int = 64,
+    mode: str = "affine",
 ) -> Tuple:
     """
     Quantize K and V tensors for cache storage.
@@ -30,7 +30,8 @@ def quantize_kv(
         mode: Quantization mode ("affine", "mxfp4", etc.)
 
     Returns:
-        Tuple of quantized k, v with their scales and biases
+        Tuple of (k_q, k_scales, k_biases, v_q, v_scales, v_biases)
+        Note: biases are zeros for non-affine modes (for compiled function compatibility)
     """
     B, n_kv_heads, T, head_dim = k.shape
     has_biases = mode == "affine"
@@ -48,7 +49,6 @@ def quantize_kv(
     else:
         k_q, k_scales = k_result
         v_q, v_scales = v_result
-        k_biases, v_biases = None, None
 
     # Reshape back: quantized shape is (B * n_kv_heads * T, packed_dim)
     packed_dim = k_q.shape[-1]
@@ -62,6 +62,10 @@ def quantize_kv(
     if has_biases:
         k_biases = k_biases.reshape(B, n_kv_heads, T, scales_dim)
         v_biases = v_biases.reshape(B, n_kv_heads, T, scales_dim)
+    else:
+        # For non-affine modes, return zero biases for compiled function compatibility
+        k_biases = mx.zeros((B, n_kv_heads, T, scales_dim))
+        v_biases = mx.zeros((B, n_kv_heads, T, scales_dim))
 
     return (k_q, k_scales, k_biases, v_q, v_scales, v_biases)
 
@@ -73,9 +77,9 @@ def dequantize_kv(
     v_q: mx.array,
     v_scales: mx.array,
     v_biases: Optional[mx.array],
-    bits: int,
-    group_size: int,
-    mode: str,
+    bits: int = 4,
+    group_size: int = 64,
+    mode: str = "affine",
 ) -> Tuple[mx.array, mx.array]:
     """
     Dequantize K and V tensors from cache.
@@ -174,7 +178,7 @@ class TextAttention(nn.Module):
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple] = None,
         cache_pos: int = 0,
-        kv_quant_config: Optional[Dict[str, Any]] = None,
+        kv_quant: bool = False,
     ) -> Tuple[mx.array, Tuple]:
         """
         Args:
@@ -186,7 +190,7 @@ class TextAttention(nn.Module):
                    - (k_cache, v_cache) for regular cache
                    - (k_q, k_scales, k_biases, v_q, v_scales, v_biases) for quantized cache
             cache_pos: Current position in the cache (where to write new k,v)
-            kv_quant_config: If set, dict with 'bits', 'group_size', 'mode' for KV cache quantization
+            kv_quant: If True, use int4 quantized KV cache (default settings: bits=4, group_size=64, mode=affine)
 
         Returns:
             output: Attention output (B, T, C)
@@ -220,27 +224,20 @@ class TextAttention(nn.Module):
         k = apply_rotary_emb(k, freqs_cis, positions)
 
         if cache is not None:
-            if kv_quant_config is not None:
+            if kv_quant:
                 # Quantized cache: (k_q, k_scales, k_biases, v_q, v_scales, v_biases)
                 k_q_cache, k_scales_cache, k_biases_cache, v_q_cache, v_scales_cache, v_biases_cache = cache
-                bits = kv_quant_config["bits"]
-                group_size = kv_quant_config["group_size"]
-                mode = kv_quant_config["mode"]
 
-                # Quantize new k, v for storage
-                new_k_q, new_k_scales, new_k_biases, new_v_q, new_v_scales, new_v_biases = quantize_kv(
-                    k, v, bits, group_size, mode
-                )
+                # Quantize new k, v for storage (uses default int4 affine settings)
+                new_k_q, new_k_scales, new_k_biases, new_v_q, new_v_scales, new_v_biases = quantize_kv(k, v)
 
                 # Update cache at current position
                 k_q_cache = k_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_q)
                 k_scales_cache = k_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_scales)
+                k_biases_cache = k_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_biases)
                 v_q_cache = v_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_q)
                 v_scales_cache = v_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_scales)
-
-                if k_biases_cache is not None:
-                    k_biases_cache = k_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_biases)
-                    v_biases_cache = v_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_biases)
+                v_biases_cache = v_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_biases)
 
                 # For attention: dequantize only historical cache, keep current token in float
                 # This avoids redundant quantize->dequantize for current token and reduces
@@ -248,15 +245,14 @@ class TextAttention(nn.Module):
                 if cache_pos > 0:
                     k_q_hist = k_q_cache[:, :, :cache_pos, :]
                     k_scales_hist = k_scales_cache[:, :, :cache_pos, :]
-                    k_biases_hist = k_biases_cache[:, :, :cache_pos, :] if k_biases_cache is not None else None
+                    k_biases_hist = k_biases_cache[:, :, :cache_pos, :]
                     v_q_hist = v_q_cache[:, :, :cache_pos, :]
                     v_scales_hist = v_scales_cache[:, :, :cache_pos, :]
-                    v_biases_hist = v_biases_cache[:, :, :cache_pos, :] if v_biases_cache is not None else None
+                    v_biases_hist = v_biases_cache[:, :, :cache_pos, :]
 
                     k_hist, v_hist = dequantize_kv(
                         k_q_hist, k_scales_hist, k_biases_hist,
                         v_q_hist, v_scales_hist, v_biases_hist,
-                        bits, group_size, mode
                     )
                     # Concatenate historical (dequantized) with current (already float)
                     k = mx.concatenate([k_hist, k], axis=2)

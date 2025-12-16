@@ -32,6 +32,7 @@ _initialized = False
 _quantize_mode = None
 
 MODEL_ID = "moondream/moondream3-preview"
+MODEL_ID_INT4 = "moondream/md3p-int4"
 
 
 def _extract_commit_hash(snapshot_path: Path) -> str:
@@ -83,8 +84,13 @@ def _remap_weight_name(name: str) -> str:
     return name
 
 
-def _load_weights(weights_path: Path):
-    """Load weights from HuggingFace safetensors and remap to MLX model structure."""
+def _load_weights(weights_path: Path, remap: bool = True):
+    """Load weights from HuggingFace safetensors.
+
+    Args:
+        weights_path: Path to the weights directory
+        remap: If True, remap HF names to MLX names. If False, assume already remapped.
+    """
     index_path = weights_path / "model.safetensors.index.json"
     with open(index_path, "r") as f:
         index = json.load(f)
@@ -96,6 +102,9 @@ def _load_weights(weights_path: Path):
         weights = mx.load(str(shard_path))
         all_weights.update(weights)
 
+    if not remap:
+        return all_weights
+
     remapped = {}
     for name, weight in all_weights.items():
         new_name = _remap_weight_name(name)
@@ -105,6 +114,37 @@ def _load_weights(weights_path: Path):
     return remapped
 
 
+def _is_quantized_weights(weights: dict) -> bool:
+    """Check if weights contain pre-quantized MoE weights."""
+    for name in weights.keys():
+        if name.endswith("_q") and "mlp.fc" in name:
+            return True
+    return False
+
+
+def _setup_quantized_moe(model, weights: dict):
+    """Replace MoEMLP with QuantizedMoEMLP for blocks that have quantized weights."""
+    from md3.moe import QuantizedMoEMLP
+
+    for block in model.text.blocks:
+        if hasattr(block, "is_moe") and block.is_moe:
+            # Check if this block has quantized weights
+            block_prefix = f"text.blocks.{block.layer_idx}.mlp"
+            if f"{block_prefix}.fc1_q" in weights:
+                # Create QuantizedMoEMLP with same config
+                old_mlp = block.mlp
+                q_mlp = QuantizedMoEMLP(
+                    dim=old_mlp.dim,
+                    n_experts=old_mlp.n_experts,
+                    expert_dim=old_mlp.expert_dim,
+                    experts_per_token=old_mlp.experts_per_token,
+                )
+                block.mlp = q_mlp
+
+    # Enable quantized KV cache
+    model._kv_quant = True
+
+
 def _get_model():
     """Get the model, checking for updates from HuggingFace."""
     global _model, _model_commit_hash
@@ -112,24 +152,36 @@ def _get_model():
     from huggingface_hub import snapshot_download
     from md3 import Moondream
 
-    logger.debug(f"Checking for model updates: {MODEL_ID}")
+    # Use int4 repo if quantization is requested
+    model_id = MODEL_ID_INT4 if _quantize_mode else MODEL_ID
+    logger.debug(f"Checking for model updates: {model_id}")
     weights_path = None
 
     try:
-        weights_path = Path(snapshot_download(MODEL_ID, token=True))
+        weights_path = Path(snapshot_download(model_id, token=True))
     except Exception:
         pass
 
     if weights_path is None:
         try:
-            weights_path = Path(snapshot_download(MODEL_ID, local_files_only=True))
+            weights_path = Path(snapshot_download(model_id, local_files_only=True))
             logger.info("Using cached model (could not check for updates)")
         except Exception as e:
-            raise RuntimeError(
-                f"Could not load model {MODEL_ID}. "
-                f"Either login to HuggingFace with 'huggingface-cli login' "
-                f"or ensure the model is already cached. Error: {e}"
-            )
+            # If int4 repo not available, fall back to base repo + runtime quantization
+            if _quantize_mode and model_id == MODEL_ID_INT4:
+                logger.info("Int4 weights not available, falling back to runtime quantization")
+                try:
+                    weights_path = Path(snapshot_download(MODEL_ID, token=True))
+                    model_id = MODEL_ID  # Reset to base model
+                except Exception:
+                    weights_path = Path(snapshot_download(MODEL_ID, local_files_only=True))
+                    model_id = MODEL_ID
+            else:
+                raise RuntimeError(
+                    f"Could not load model {model_id}. "
+                    f"Either login to HuggingFace with 'huggingface-cli login' "
+                    f"or ensure the model is already cached. Error: {e}"
+                )
 
     new_commit_hash = _extract_commit_hash(weights_path)
 
@@ -144,23 +196,31 @@ def _get_model():
 
     config = _load_config(weights_path)
     model = Moondream(config)
-    weights = _load_weights(weights_path)
+
+    # Load weights - int4 weights are already remapped, base weights need remapping
+    is_int4_repo = (model_id == MODEL_ID_INT4)
+    weights = _load_weights(weights_path, remap=not is_int4_repo)
+
+    # Check if weights are pre-quantized
+    if _is_quantized_weights(weights):
+        logger.info("Loading pre-quantized int4 weights")
+        _setup_quantized_moe(model, weights)
+
     model.load_weights(list(weights.items()), strict=False)
 
-    # Delete weights dict to drop extra reference to bf16 arrays
-    # The model's parameters now hold the only references
+    # Delete weights dict to drop extra reference to arrays
     del weights
 
     mx.eval(model.parameters())
     mx.synchronize()
 
-    # Apply quantization if specified
-    if _quantize_mode:
-        logger.info(f"Quantizing MoE experts with mode: {_quantize_mode}")
-        model.quantize_experts(mode=_quantize_mode)
+    # Apply runtime quantization only if needed (base model + quantize mode)
+    if _quantize_mode and not is_int4_repo:
+        logger.info("Quantizing MoE experts to int4 (runtime)")
+        model.quantize_experts()
         mx.eval(model.parameters())
-        mx.clear_cache()  # Clear MLX internal caches
-        gc.collect()  # Force Python GC to free old MoEMLP objects
+        mx.clear_cache()
+        gc.collect()
         logger.info("Quantization complete")
 
     _model = model

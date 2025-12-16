@@ -8,6 +8,44 @@
     "posthog_host": "https://us.i.posthog.com"
   },
   "models": {
+    "moondream-3-mlx": {
+      "name": "Moondream 3 MLX",
+      "description": "Vision-language model optimized for Apple Silicon with MLX",
+      "backend": "mlx_backend",
+      "args": {},
+      "system_requirements": {
+        "RAM": "16GB minimum",
+        "GPU": "Apple Silicon",
+        "Storage": "15GB minimum"
+      },
+      "is_default": false,
+      "supported_os": [
+        "darwin"
+      ],
+      "supported_arch": [
+        "arm64"
+      ]
+    },
+    "moondream-3-mlx-int4": {
+      "name": "Moondream 3 MLX INT4",
+      "description": "Vision-language model with INT4 quantized MoE for reduced memory",
+      "backend": "mlx_backend",
+      "args": {
+        "quantize": "int4"
+      },
+      "system_requirements": {
+        "RAM": "16GB minimum",
+        "GPU": "Apple Silicon",
+        "Storage": "15GB minimum"
+      },
+      "is_default": true,
+      "supported_os": [
+        "darwin"
+      ],
+      "supported_arch": [
+        "arm64"
+      ]
+    },
     "moondream-3-preview-orchard": {
       "name": "Moondream 3 Preview",
       "description": "Vision-language model for image understanding and analysis",
@@ -57,7 +95,7 @@
         "RAM": "8GB minimum",
         "Storage": "5GB available"
       },
-      "is_default": true,
+      "is_default": false,
       "supported_os": [
         "windows",
         "linux",
@@ -66,6 +104,19 @@
     }
   },
   "backends": {
+    "mlx_backend": {
+      "name": "MLX Backend (Apple Silicon)",
+      "download_url": "backends/mlx_backend",
+      "entry_module": "backend",
+      "functions": [
+        "caption",
+        "query",
+        "detect",
+        "point"
+      ],
+      "version": "1.0.0",
+      "min_version": "0.1.0"
+    },
     "orchard_backend": {
       "name": "Orchard Backend (Apple Silicon)",
       "download_url": "backends/orchard",

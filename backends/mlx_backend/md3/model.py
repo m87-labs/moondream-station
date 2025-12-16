@@ -34,6 +34,30 @@ ObjectSamplingSettings = TypedDict(
 
 DEFAULT_MAX_SEQ_LEN = 1024
 
+# Module-level cache for compiled functions (kept outside model to avoid load_weights issues)
+_compiled_cache: Dict[int, Dict[str, any]] = {}
+
+
+def _get_compiled(model, name: str, fn):
+    """Get or create a compiled version of fn, cached by model instance."""
+    model_id = id(model)
+    if model_id not in _compiled_cache:
+        _compiled_cache[model_id] = {}
+    cache = _compiled_cache[model_id]
+    if name not in cache:
+        cache[name] = mx.compile(fn)
+    return cache[name]
+
+
+def _clear_compiled(model, name: str = None):
+    """Clear compiled cache for a model (or specific function)."""
+    model_id = id(model)
+    if model_id in _compiled_cache:
+        if name is None:
+            del _compiled_cache[model_id]
+        elif name in _compiled_cache[model_id]:
+            del _compiled_cache[model_id][name]
+
 
 class Moondream(nn.Module):
     def __init__(self, config: MoondreamConfig, max_seq_len: int = DEFAULT_MAX_SEQ_LEN):
@@ -58,45 +82,53 @@ class Moondream(nn.Module):
         )
         attn_mask = attn_mask | prefix_mask_padded
         self.attn_mask = attn_mask
-        self._compiled_decode_step = None
-        self._kv_quantize_config = None  # Set by quantize_experts()
+        self._kv_quant = False  # Set to True by quantize_experts()
 
-    def quantize_experts(self, mode: str = "int4") -> None:
-        """
-        Quantize MoE expert weights in-place.
+    def _get_vision_compiled(self):
+        """Get compiled vision encoder (lazy compilation)."""
+        return _get_compiled(self, "vision", self.vision)
 
-        Args:
-            mode: Quantization mode. Options:
-                - "int4": 4-bit affine integer quantization
-                - "int8": 8-bit affine integer quantization
-                - "mxfp4": OCP Microscaling FP4
+    def _get_decode_step_compiled(self):
+        """Get compiled decode step function (lazy compilation).
+
+        This is separate from self.text because TextModel.__call__ has mx.eval()
+        for memory management during prefill, which is incompatible with mx.compile().
+        For decode (single token), we don't need mx.eval(), so we can compile this path.
         """
+        # Check cache first to avoid creating function unnecessarily
+        model_id = id(self)
+        if model_id in _compiled_cache and "decode_step" in _compiled_cache[model_id]:
+            return _compiled_cache[model_id]["decode_step"]
+
+        # Create decode step function (same as TextModel.__call__ but without mx.eval)
+        text = self.text
+        def decode_step(embedding, positions, mask, cache, cache_pos, kv_quant):
+            x = embedding
+            new_caches = []
+            for i, block in enumerate(text.blocks):
+                block_cache = cache[i] if cache is not None else None
+                x, new_cache = block(x, text.freqs_cis, positions, mask, block_cache, cache_pos, kv_quant)
+                new_caches.append(new_cache)
+            return x, new_caches
+
+        return _get_compiled(self, "decode_step", decode_step)
+
+    def quantize_experts(self) -> None:
+        """Quantize MoE expert weights to int4 and enable quantized KV cache."""
         from .moe import QuantizedMoEMLP
 
-        mode_config = {
-            "int4": {"bits": 4, "group_size": 64, "mode": "affine"},
-            "int8": {"bits": 8, "group_size": 64, "mode": "affine"},
-            "mxfp4": {"bits": 4, "group_size": 32, "mode": "mxfp4"},
-        }
-
-        if mode not in mode_config:
-            raise ValueError(f"Unknown quantization mode: {mode}. Options: {list(mode_config.keys())}")
-
-        config = mode_config[mode]
         for block in self.text.blocks:
             if hasattr(block, "is_moe") and block.is_moe:
-                block.mlp = QuantizedMoEMLP.from_float(block.mlp, **config)
+                block.mlp = QuantizedMoEMLP.from_float(block.mlp)
 
         # Force garbage collection to free old MoE bf16 weights
-        # Without this, Python's GC may not run immediately and the old
-        # MoEMLP objects (with their large fc1/fc2 bf16 arrays) linger in memory
         gc.collect()
 
-        # KV cache quantization disabled - keep unquantized for better decode speed
-        # To enable: self._kv_quantize_config = config
+        # Enable quantized KV cache for the quantized model
+        self._kv_quant = True
 
-        # Reset compiled decode step since model structure changed
-        self._compiled_decode_step = None
+        # Invalidate compiled cache since model structure changed
+        _clear_compiled(self, "decode_step")
 
     def _allocate_kv_cache(self, batch_size: int = 1) -> List[Tuple]:
         """Pre-allocate KV cache for all layers.
@@ -112,64 +144,28 @@ class Moondream(nn.Module):
 
         cache = []
 
-        if self._kv_quantize_config is not None:
-            # Allocate quantized cache
-            bits = self._kv_quantize_config["bits"]
-            group_size = self._kv_quantize_config["group_size"]
-            mode = self._kv_quantize_config["mode"]
-            has_biases = mode == "affine"
-
-            # Calculate packed dimension: each uint32 holds 32/bits values
-            # For 4-bit: 8 values per uint32, so packed_dim = head_dim / 8
-            # For 8-bit: 4 values per uint32, so packed_dim = head_dim / 4
-            packed_dim = (head_dim * bits + 31) // 32  # ceiling division
-
-            # Calculate scales dimension: number of groups
-            scales_dim = (head_dim + group_size - 1) // group_size  # ceiling division
+        if self._kv_quant:
+            # Allocate quantized cache (int4: bits=4, group_size=64)
+            packed_dim = head_dim // 8  # 4-bit: 8 values per uint32
+            scales_dim = head_dim // 64  # group_size=64
 
             for _ in range(n_layers):
                 k_q = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, packed_dim), dtype=mx.uint32)
                 k_scales = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
+                k_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
                 v_q = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, packed_dim), dtype=mx.uint32)
                 v_scales = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-
-                if has_biases:
-                    k_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-                    v_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-                else:
-                    k_biases = None
-                    v_biases = None
+                v_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
 
                 cache.append((k_q, k_scales, k_biases, v_q, v_scales, v_biases))
         else:
-            # Allocate regular cache
+            # Allocate regular bf16 cache
             for _ in range(n_layers):
                 k = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, head_dim))
                 v = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, head_dim))
                 cache.append((k, v))
 
         return cache
-
-    def _get_compiled_decode_step(self):
-        if self._compiled_decode_step is None:
-            def decode_step(embedding, positions, mask, cache_pos, *cache_arrays):
-                n_layers = len(self.text.blocks)
-                cache = []
-                for i in range(n_layers):
-                    k = cache_arrays[2 * i]
-                    v = cache_arrays[2 * i + 1]
-                    cache.append((k, v))
-
-                hidden, new_cache = self.text(embedding, positions, mask, cache, cache_pos)
-                logits = self.text.generate_logits(hidden)
-
-                out_arrays = [logits, hidden]
-                for k, v in new_cache:
-                    out_arrays.extend([k, v])
-                return out_arrays
-
-            self._compiled_decode_step = mx.compile(decode_step)
-        return self._compiled_decode_step
 
     def _run_vision_encoder(self, image: Image.Image) -> mx.array:
         crops, tiling = prepare_crops(
@@ -178,7 +174,7 @@ class Moondream(nn.Module):
             max_crops=self.config.vision.max_crops,
             overlap_margin=self.config.vision.overlap_margin,
         )
-        return self.vision(crops, tiling)
+        return self._get_vision_compiled()(crops, tiling)
 
     def _apply_top_p(self, probs: mx.array, top_p: float) -> mx.array:
         """Apply top-p (nucleus) filtering to probability distribution."""
@@ -208,11 +204,15 @@ class Moondream(nn.Module):
         cache_pos: int,
         cache: List[Tuple],
     ) -> Tuple[mx.array, List[Tuple]]:
-        """Prefill the cache with embeddings starting at cache_pos."""
+        """Prefill the cache with embeddings starting at cache_pos.
+
+        Uses self.text directly (not compiled) because TextModel.__call__ has
+        mx.eval() calls for memory management during prefill.
+        """
         seq_len = embeddings.shape[1]
         positions = mx.arange(cache_pos, cache_pos + seq_len)
         mask = self.attn_mask[:, :, cache_pos:cache_pos + seq_len, :]
-        hidden, new_cache = self.text(embeddings, positions, mask, cache, cache_pos, self._kv_quantize_config)
+        hidden, new_cache = self.text(embeddings, positions, mask, cache, cache_pos, self._kv_quant)
         return hidden, new_cache
 
     def _decode_one(
@@ -221,35 +221,15 @@ class Moondream(nn.Module):
         cache_pos: int,
         cache: List[Tuple],
     ) -> Tuple[mx.array, mx.array, List[Tuple]]:
-        """Decode one token at cache_pos."""
+        """Decode one token at cache_pos.
+
+        Uses compiled decode step for faster token generation.
+        """
         positions = mx.array([cache_pos])
         mask = self.attn_mask[:, :, cache_pos:cache_pos+1, :]
-
-        if self._kv_quantize_config is not None:
-            # Quantized cache: use non-compiled path
-            hidden, new_cache = self.text(embedding, positions, mask, cache, cache_pos, self._kv_quantize_config)
-            logits = self.text.generate_logits(hidden)
-            return logits, hidden, new_cache
-        else:
-            # Regular cache: use compiled decode step
-            decode_step = self._get_compiled_decode_step()
-
-            cache_arrays = []
-            for k, v in cache:
-                cache_arrays.extend([k, v])
-
-            out_arrays = decode_step(embedding, positions, mask, cache_pos, *cache_arrays)
-
-            logits = out_arrays[0]
-            hidden = out_arrays[1]
-            n_layers = len(self.text.blocks)
-            new_cache = []
-            for i in range(n_layers):
-                k = out_arrays[2 + 2 * i]
-                v = out_arrays[2 + 2 * i + 1]
-                new_cache.append((k, v))
-
-            return logits, hidden, new_cache
+        hidden, new_cache = self._get_decode_step_compiled()(embedding, positions, mask, cache, cache_pos, self._kv_quant)
+        logits = self.text.generate_logits(hidden)
+        return logits, hidden, new_cache
 
     def query(
         self,
