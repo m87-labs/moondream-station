@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 SERVICE_PORT = 2020
 UPDATE_ENDPOINT = "https://api.github.com/repos/m87/moondream-station/releases/latest"
-SERVICE_HOST = "127.0.0.1"
+SERVICE_HOST = "0.0.0.0"
 AUTO_START = True
 LOG_LEVEL = "INFO"
 INFERENCE_WORKERS = 1
