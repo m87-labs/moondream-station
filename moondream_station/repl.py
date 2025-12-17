@@ -1,5 +1,7 @@
+import os
 import sys
 import shlex
+
 from typing import Dict, Callable
 from prompt_toolkit import prompt
 from prompt_toolkit.formatted_text import ANSI
@@ -27,12 +29,16 @@ class REPLSession:
         self.console = Console()
         self.manifest_source = manifest_source
         self.config = ConfigManager()
+        self.prompts = Prompts()
+
+        # Setup HF token before anything that might need HuggingFace access
+        self._setup_hf_token()
+
         self.manifest_manager = ManifestManager(self.config)
         self.analytics = Analytics(self.config, self.manifest_manager)
         self.models = ModelManager(self.config, self.manifest_manager)
         self.updater = UpdateChecker(self.config, self.manifest_manager)
         self.display = Display()
-        self.prompts = Prompts()
         self.session_state = SessionState()
         self.service = ServiceManager(
             self.config, self.manifest_manager, self.session_state, self.analytics
@@ -84,6 +90,21 @@ class REPLSession:
             "manual": self.commands.manual,
             "man": self.commands.manual,
         }
+
+    def _setup_hf_token(self):
+        """Ensure HF_TOKEN is available in environment."""
+        if os.environ.get("HF_TOKEN"):
+            return
+
+        stored_token = self.config.get("hf_token")
+        if stored_token:
+            os.environ["HF_TOKEN"] = stored_token
+            return
+
+        token = self.prompts.prompt_hf_token()
+        if token:
+            self.config.set("hf_token", token)
+            os.environ["HF_TOKEN"] = token
 
     def _load_manifest(self, source: str):
         """Load manifest from source"""

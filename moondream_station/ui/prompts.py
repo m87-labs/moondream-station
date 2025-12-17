@@ -1,4 +1,6 @@
+import sys
 import typer
+
 from typing import List
 from rich.prompt import Prompt
 from rich.table import Table
@@ -86,3 +88,31 @@ class Prompts:
                     self.console.print("[red]Port must be between 1 and 65535[/red]")
             except ValueError:
                 self.console.print("[red]Please enter a valid number[/red]")
+
+    def prompt_hf_token(self) -> str:
+        """Prompt for HuggingFace token with clean disappearing UI.
+
+        Returns token string, or empty string if skipped.
+        """
+        self.console.print(
+            "[yellow]HuggingFace token required for Moondream 3[/yellow]"
+        )
+        self.console.print(
+            "[dim]Get token: https://huggingface.co/settings/tokens | Enter to skip[/dim]"
+        )
+
+        try:
+            token = prompt("Token: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            token = ""
+
+        # Clear prompt lines (move up 3, clear to end)
+        sys.stdout.write("\033[3A\033[J")
+        sys.stdout.flush()
+
+        if token:
+            self.console.print("[green]HuggingFace token saved[/green]")
+        else:
+            self.console.print("[dim]HuggingFace token skipped[/dim]")
+
+        return token
