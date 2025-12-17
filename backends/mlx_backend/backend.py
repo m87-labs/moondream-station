@@ -156,15 +156,19 @@ def _setup_quantized_moe(model, weights: dict):
 
 
 def _get_model():
-    """Get the model, checking for updates from HuggingFace."""
+    """Get the model, loading from HuggingFace if needed."""
     global _model, _model_commit_hash
+
+    # Return cached model if already loaded
+    if _model is not None:
+        return _model
 
     from huggingface_hub import snapshot_download
     from md3 import Moondream
 
     # Use int4 repo if quantization is requested
     model_id = MODEL_ID_INT4 if _quantize_mode else MODEL_ID
-    logger.debug(f"Checking for model updates: {model_id}")
+    logger.info(f"Loading model: {model_id}")
     weights_path = None
 
     try:
@@ -184,15 +188,7 @@ def _get_model():
             )
 
     new_commit_hash = _extract_commit_hash(weights_path)
-
-    if _model is None:
-        logger.info(f"Loading model (commit: {new_commit_hash[:8]}...)")
-    elif new_commit_hash != _model_commit_hash:
-        logger.info(f"New model version detected: {new_commit_hash[:8]}...")
-        _model = None
-        mx.clear_cache()
-    else:
-        return _model
+    logger.info(f"Model commit: {new_commit_hash[:8]}...")
 
     config = _load_config(weights_path)
     model = Moondream(config)
@@ -279,7 +275,9 @@ def caption(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
-        return model.caption(image, length=length, stream=stream, settings=settings)
+        result = model.caption(image, length=length, stream=stream, settings=settings)
+        mx.clear_cache()  # Release unused metal buffers
+        return result
     except Exception as e:
         logger.exception("Caption failed")
         return {"error": str(e)}
@@ -300,9 +298,11 @@ def query(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
-        return model.query(
+        result = model.query(
             image, question, reasoning=reasoning, stream=stream, settings=settings
         )
+        mx.clear_cache()  # Release unused metal buffers
+        return result
     except Exception as e:
         logger.exception("Query failed")
         return {"error": str(e)}
@@ -324,6 +324,7 @@ def detect(
         image = _load_image(image_url)
         settings = _extract_object_settings(kwargs)
         result = model.detect(image, target_obj, settings=settings)
+        mx.clear_cache()  # Release unused metal buffers
         return {"objects": result.get("objects", [])}
     except Exception as e:
         logger.exception("Detect failed")
@@ -346,6 +347,7 @@ def point(
         image = _load_image(image_url)
         settings = _extract_object_settings(kwargs)
         result = model.point(image, target_obj, settings=settings)
+        mx.clear_cache()  # Release unused metal buffers
         points = result.get("points", [])
         return {"points": points, "count": len(points)}
     except Exception as e:
