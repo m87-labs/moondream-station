@@ -8,7 +8,6 @@ Requires macOS with Apple Silicon (M1/M2/M3/M4).
 from __future__ import annotations
 
 import base64
-import gc
 import io
 import json
 import logging
@@ -123,15 +122,17 @@ def _is_quantized_weights(weights: dict) -> bool:
 
 
 def _setup_quantized_moe(model, weights: dict):
-    """Replace MoEMLP with QuantizedMoEMLP for blocks that have quantized weights."""
+    """Replace MoEMLP with QuantizedMoEMLP for blocks that have quantized weights.
+
+    Manually assigns quantized weights because MLX's load_weights() cannot load
+    into None attributes - it can only replace existing arrays.
+    """
     from md3.moe import QuantizedMoEMLP
 
     for block in model.text.blocks:
         if hasattr(block, "is_moe") and block.is_moe:
-            # Check if this block has quantized weights
             block_prefix = f"text.blocks.{block.layer_idx}.mlp"
             if f"{block_prefix}.fc1_q" in weights:
-                # Create QuantizedMoEMLP with same config
                 old_mlp = block.mlp
                 q_mlp = QuantizedMoEMLP(
                     dim=old_mlp.dim,
@@ -139,6 +140,15 @@ def _setup_quantized_moe(model, weights: dict):
                     expert_dim=old_mlp.expert_dim,
                     experts_per_token=old_mlp.experts_per_token,
                 )
+
+                # Manually assign quantized weights (load_weights can't load into None)
+                q_mlp.fc1_q = weights[f"{block_prefix}.fc1_q"]
+                q_mlp.fc1_scales = weights[f"{block_prefix}.fc1_scales"]
+                q_mlp.fc1_biases = weights.get(f"{block_prefix}.fc1_biases")
+                q_mlp.fc2_q = weights[f"{block_prefix}.fc2_q"]
+                q_mlp.fc2_scales = weights[f"{block_prefix}.fc2_scales"]
+                q_mlp.fc2_biases = weights.get(f"{block_prefix}.fc2_biases")
+
                 block.mlp = q_mlp
 
     # Enable quantized KV cache
@@ -167,21 +177,11 @@ def _get_model():
             weights_path = Path(snapshot_download(model_id, local_files_only=True))
             logger.info("Using cached model (could not check for updates)")
         except Exception as e:
-            # If int4 repo not available, fall back to base repo + runtime quantization
-            if _quantize_mode and model_id == MODEL_ID_INT4:
-                logger.info("Int4 weights not available, falling back to runtime quantization")
-                try:
-                    weights_path = Path(snapshot_download(MODEL_ID, token=True))
-                    model_id = MODEL_ID  # Reset to base model
-                except Exception:
-                    weights_path = Path(snapshot_download(MODEL_ID, local_files_only=True))
-                    model_id = MODEL_ID
-            else:
-                raise RuntimeError(
-                    f"Could not load model {model_id}. "
-                    f"Either login to HuggingFace with 'huggingface-cli login' "
-                    f"or ensure the model is already cached. Error: {e}"
-                )
+            raise RuntimeError(
+                f"Could not load model {model_id}. "
+                f"Either login to HuggingFace with 'huggingface-cli login' "
+                f"or ensure the model is already cached. Error: {e}"
+            )
 
     new_commit_hash = _extract_commit_hash(weights_path)
 
@@ -198,7 +198,7 @@ def _get_model():
     model = Moondream(config)
 
     # Load weights - int4 weights are already remapped, base weights need remapping
-    is_int4_repo = (model_id == MODEL_ID_INT4)
+    is_int4_repo = model_id == MODEL_ID_INT4
     weights = _load_weights(weights_path, remap=not is_int4_repo)
 
     # Check if weights are pre-quantized
@@ -213,15 +213,6 @@ def _get_model():
 
     mx.eval(model.parameters())
     mx.synchronize()
-
-    # Apply runtime quantization only if needed (base model + quantize mode)
-    if _quantize_mode and not is_int4_repo:
-        logger.info("Quantizing MoE experts to int4 (runtime)")
-        model.quantize_experts()
-        mx.eval(model.parameters())
-        mx.clear_cache()
-        gc.collect()
-        logger.info("Quantization complete")
 
     _model = model
     _model_commit_hash = new_commit_hash
@@ -309,7 +300,9 @@ def query(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
-        return model.query(image, question, reasoning=reasoning, stream=stream, settings=settings)
+        return model.query(
+            image, question, reasoning=reasoning, stream=stream, settings=settings
+        )
     except Exception as e:
         logger.exception("Query failed")
         return {"error": str(e)}

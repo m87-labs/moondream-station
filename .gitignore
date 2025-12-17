@@ -17,3 +17,12 @@ __pycache__
 hidden/
 output/
 demo_vid/
+backends/mlx_backend/backend.py
+upload_pypi.sh
+backends/mlx_backend/upload_int4_weights.py
+moondream_station.egg-info/dependency_links.txt
+moondream_station.egg-info/entry_points.txt
+moondream_station.egg-info/PKG-INFO
+moondream_station.egg-info/requires.txt
+moondream_station.egg-info/SOURCES.txt
+moondream_station.egg-info/top_level.txt
