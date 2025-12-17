@@ -198,7 +198,7 @@ def _get_model():
     model = Moondream(config)
 
     # Load weights - int4 weights are already remapped, base weights need remapping
-    is_int4_repo = (model_id == MODEL_ID_INT4)
+    is_int4_repo = model_id == MODEL_ID_INT4
     weights = _load_weights(weights_path, remap=not is_int4_repo)
 
     # Check if weights are pre-quantized
@@ -300,7 +300,9 @@ def query(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
-        return model.query(image, question, reasoning=reasoning, stream=stream, settings=settings)
+        return model.query(
+            image, question, reasoning=reasoning, stream=stream, settings=settings
+        )
     except Exception as e:
         logger.exception("Query failed")
         return {"error": str(e)}
