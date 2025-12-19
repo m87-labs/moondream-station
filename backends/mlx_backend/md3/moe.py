@@ -48,6 +48,30 @@ class MoEMLP(nn.Module):
         topk_logits = mx.take_along_axis(router_logits, topk_idxs, axis=-1)
         topk_weights = mx.softmax(topk_logits, axis=-1)
 
+        if T == 1:
+            num_tokens = x_flat.shape[0]
+            top_k = self.experts_per_token
+
+            flat_idxs = topk_idxs.reshape(-1)
+            flat_weights = topk_weights.reshape(-1)
+
+            w1_selected = self.fc1[flat_idxs]
+            w2_selected = self.fc2[flat_idxs]
+
+            x_expanded = mx.broadcast_to(x_flat[:, None, :], (num_tokens, top_k, C))
+            x_expanded = x_expanded.reshape(-1, C, 1)
+
+            x1_full = mx.matmul(w1_selected, x_expanded).squeeze(-1)
+            h, g = mx.split(x1_full, 2, axis=-1)
+            h = nn.gelu(h) * (g + 1)
+
+            expert_outs = mx.matmul(w2_selected, h[:, :, None]).squeeze(-1)
+            weighted_outs = expert_outs * flat_weights[:, None]
+            weighted_outs = weighted_outs.reshape(num_tokens, top_k, C)
+            mlp_out = weighted_outs.sum(axis=1)
+
+            return mlp_out.reshape(B, T, C)
+
         x_expanded = mx.expand_dims(x_flat, (-2, -3))
 
         do_sort = topk_idxs.size >= 64

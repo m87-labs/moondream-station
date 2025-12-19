@@ -79,8 +79,22 @@ def dequantize_kv(
     else:
         k_biases_flat, v_biases_flat = None, None
 
-    k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=bits, group_size=group_size, mode=mode)
-    v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=bits, group_size=group_size, mode=mode)
+    k = mx.dequantize(
+        k_q_flat,
+        k_scales_flat,
+        k_biases_flat,
+        bits=bits,
+        group_size=group_size,
+        mode=mode,
+    )
+    v = mx.dequantize(
+        v_q_flat,
+        v_scales_flat,
+        v_biases_flat,
+        bits=bits,
+        group_size=group_size,
+        mode=mode,
+    )
 
     head_dim = k.shape[-1]
 
@@ -131,11 +145,17 @@ def _dequantize_kv_affine(
     v_scales_flat = v_scales.reshape(-1, v_scales.shape[-1])
     v_biases_flat = v_biases.reshape(-1, v_biases.shape[-1])
 
-    k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=4, group_size=64, mode="affine")
-    v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=4, group_size=64, mode="affine")
+    k = mx.dequantize(
+        k_q_flat, k_scales_flat, k_biases_flat, bits=4, group_size=64, mode="affine"
+    )
+    v = mx.dequantize(
+        v_q_flat, v_scales_flat, v_biases_flat, bits=4, group_size=64, mode="affine"
+    )
 
     head_dim = k.shape[-1]
-    return k.reshape(B, n_kv_heads, -1, head_dim), v.reshape(B, n_kv_heads, -1, head_dim)
+    return k.reshape(B, n_kv_heads, -1, head_dim), v.reshape(
+        B, n_kv_heads, -1, head_dim
+    )
 
 
 def _quantized_scaled_dot_product_attention(
@@ -285,7 +305,6 @@ class TextAttention(nn.Module):
         qkv_dim = dim + 2 * (dim * n_kv_heads // n_heads)
         self.qkv = nn.Linear(dim, qkv_dim)
         self.proj = nn.Linear(dim, dim)
-        self.rope = nn.RoPE(rotary_dim, traditional=False, base=1500000.0)
 
         self.tau_wq = mx.zeros((n_heads, qkv_dim))
         self.tau_wv = mx.zeros((n_heads, qkv_dim))
@@ -298,6 +317,8 @@ class TextAttention(nn.Module):
         positions: mx.array,
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple] = None,
+        cache_pos: int = 0,
+        kv_quant: bool = False,
     ) -> Tuple[mx.array, Tuple]:
         B, T, C = x.shape
         qkv_out = self.qkv(x)
@@ -323,18 +344,52 @@ class TextAttention(nn.Module):
         q = q * tau_q
         v = v * tau_v
 
-        rope_offset = cache.offset if cache is not None else 0
-        q = self.rope(q, offset=rope_offset)
-        k = self.rope(k, offset=rope_offset)
+        q = apply_rotary_emb(q, freqs_cis, positions)
+        k = apply_rotary_emb(k, freqs_cis, positions)
 
         if cache is not None:
-            k, v = cache.update_and_fetch(k, v)
-            new_cache = cache
-        else:
-            new_cache = None
+            if kv_quant:
+                k_q_cache, k_scales_cache, k_biases_cache, v_q_cache, v_scales_cache, v_biases_cache = cache
 
-        if cache is not None and hasattr(cache, "bits"):
-            kv_len = cache.offset
+                new_k_q, new_k_scales, new_k_biases, new_v_q, new_v_scales, new_v_biases = _quantize_kv_affine(k, v)
+
+                k_q_cache = k_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_q)
+                k_scales_cache = k_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_scales)
+                k_biases_cache = k_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_biases)
+                v_q_cache = v_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_q)
+                v_scales_cache = v_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_scales)
+                v_biases_cache = v_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_biases)
+
+                kv_len = cache_pos + T
+                q_keys = (
+                    k_q_cache[:, :, :kv_len, :],
+                    k_scales_cache[:, :, :kv_len, :],
+                    k_biases_cache[:, :, :kv_len, :],
+                )
+                q_values = (
+                    v_q_cache[:, :, :kv_len, :],
+                    v_scales_cache[:, :, :kv_len, :],
+                    v_biases_cache[:, :, :kv_len, :],
+                )
+
+                new_cache = (k_q_cache, k_scales_cache, k_biases_cache, v_q_cache, v_scales_cache, v_biases_cache)
+            else:
+                k_cache, v_cache = cache
+                k_cache = k_cache.at[:, :, cache_pos : cache_pos + T, :].add(k)
+                v_cache = v_cache.at[:, :, cache_pos : cache_pos + T, :].add(v)
+                k = k_cache[:, :, : cache_pos + T, :]
+                v = v_cache[:, :, : cache_pos + T, :]
+                new_cache = (k_cache, v_cache)
+        else:
+            new_cache = (k, v)
+
+        if kv_quant:
+            if cache is None:
+                k_q, k_scales, k_biases, v_q, v_scales, v_biases = _quantize_kv_affine(k, v)
+                q_keys = (k_q, k_scales, k_biases)
+                q_values = (v_q, v_scales, v_biases)
+                kv_len = k_q.shape[2]
+
             if mask is not None:
                 mask_slice = mask[:, :, :, :kv_len]
             else:
@@ -342,20 +397,23 @@ class TextAttention(nn.Module):
 
             out = _quantized_scaled_dot_product_attention(
                 q,
-                k,
-                v,
+                q_keys,
+                q_values,
                 scale=self.scale,
                 mask=mask_slice,
-                group_size=cache.group_size,
-                bits=cache.bits,
+                group_size=64,
+                bits=4,
             )
         else:
+            if self.n_kv_heads != self.n_heads:
+                n_rep = self.n_heads // self.n_kv_heads
+                k = mx.repeat(k, n_rep, axis=1)
+                v = mx.repeat(v, n_rep, axis=1)
+
             if mask is not None:
                 kv_len = k.shape[2]
                 mask_slice = mask[:, :, :, :kv_len]
-                out = mx.fast.scaled_dot_product_attention(
-                    q, k, v, scale=self.scale, mask=mask_slice
-                )
+                out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask_slice)
             else:
                 out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
 

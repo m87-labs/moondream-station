@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _model = None
 _model_commit_hash = None
+_loaded_model_id = None
 _initialized = False
 _quantize_mode = None
 
@@ -36,6 +37,12 @@ MODEL_ID_INT4 = "moondream/md3p-int4"
 
 def _extract_commit_hash(snapshot_path: Path) -> str:
     return snapshot_path.name
+
+
+def _snapshot_ok(snapshot_path: Path) -> bool:
+    return (snapshot_path / "config.json").is_file() and (
+        snapshot_path / "model.safetensors.index.json"
+    ).is_file()
 
 
 def init_backend(**kwargs: Any) -> None:
@@ -157,17 +164,20 @@ def _setup_quantized_moe(model, weights: dict):
 
 def _get_model():
     """Get the model, loading from HuggingFace if needed."""
-    global _model, _model_commit_hash
+    global _model, _model_commit_hash, _loaded_model_id
 
-    # Return cached model if already loaded
-    if _model is not None:
+    model_id = MODEL_ID_INT4 if _quantize_mode else MODEL_ID
+
+    if _model is not None and _loaded_model_id == model_id:
         return _model
+
+    if _model is not None and _loaded_model_id != model_id:
+        _model = None
+        _model_commit_hash = None
 
     from huggingface_hub import snapshot_download
     from md3 import Moondream
 
-    # Use int4 repo if quantization is requested
-    model_id = MODEL_ID_INT4 if _quantize_mode else MODEL_ID
     logger.info(f"Loading model: {model_id}")
     weights_path = None
 
@@ -176,7 +186,13 @@ def _get_model():
     except Exception:
         pass
 
-    if weights_path is None:
+    if weights_path is None or not _snapshot_ok(weights_path):
+        try:
+            weights_path = Path(snapshot_download(model_id, token=True, force_download=True))
+        except Exception:
+            pass
+
+    if weights_path is None or not _snapshot_ok(weights_path):
         try:
             weights_path = Path(snapshot_download(model_id, local_files_only=True))
             logger.info("Using cached model (could not check for updates)")
@@ -186,6 +202,12 @@ def _get_model():
                 f"Either login to HuggingFace with 'huggingface-cli login' "
                 f"or ensure the model is already cached. Error: {e}"
             )
+
+    if not _snapshot_ok(weights_path):
+        raise RuntimeError(
+            f"Model snapshot is incomplete for {model_id}. "
+            "Delete the cached snapshot and re-download."
+        )
 
     new_commit_hash = _extract_commit_hash(weights_path)
     logger.info(f"Model commit: {new_commit_hash[:8]}...")
@@ -212,6 +234,7 @@ def _get_model():
 
     _model = model
     _model_commit_hash = new_commit_hash
+    _loaded_model_id = model_id
     logger.info(f"Model loaded successfully (commit: {new_commit_hash[:8]}...)")
     return _model
 

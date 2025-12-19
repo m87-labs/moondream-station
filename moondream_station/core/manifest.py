@@ -361,9 +361,8 @@ class ManifestManager:
         backend_id = model_info.backend
         backend = self.load_backend(backend_id)
 
-        # Initialize backend with model args if available
-        if backend and model_info.args and hasattr(backend, "init_backend"):
-            backend.init_backend(**model_info.args)
+        if backend and hasattr(backend, "init_backend"):
+            backend.init_backend(**(model_info.args or {}))
 
         return backend
 
@@ -388,8 +387,8 @@ class ManifestManager:
             sys.modules[worker_module_name] = module
             spec.loader.exec_module(module)
 
-            if model_args and hasattr(module, "init_backend"):
-                module.init_backend(**model_args)
+            if hasattr(module, "init_backend"):
+                module.init_backend(**(model_args or {}))
 
             return module
         except Exception:
