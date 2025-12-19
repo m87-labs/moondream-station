@@ -1,5 +1,3 @@
-# Copyright © 2023-2024 Apple Inc.
-
 import mlx.core as mx
 from mlx.utils import tree_map
 from typing import Optional
@@ -220,9 +218,7 @@ class KVCache(_BaseCache):
         quant_cache = QuantizedKVCache(group_size=group_size, bits=bits)
         quant_cache.offset = self.offset
         if self.keys is not None:
-            quant_cache.keys = mx.quantize(
-                self.keys, group_size=group_size, bits=bits
-            )
+            quant_cache.keys = mx.quantize(self.keys, group_size=group_size, bits=bits)
             quant_cache.values = mx.quantize(
                 self.values, group_size=group_size, bits=bits
             )
