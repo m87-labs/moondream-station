@@ -1,5 +1,6 @@
 import base64
 import inspect
+import itertools
 import shlex
 import time
 from pathlib import Path
@@ -15,6 +16,27 @@ from .core.config import PANEL_WIDTH
 class InferenceHandler:
     def __init__(self, repl_session):
         self.repl = repl_session
+
+    def _call_with_first_token_spinner(self, func: Callable, kwargs: Dict[str, Any]):
+        result = None
+        stream_key = None
+        first_token = None
+        with self.repl.display.spinner("Waiting for first token..."):
+            result = func(**kwargs)
+            if isinstance(result, dict):
+                for key, value in result.items():
+                    if hasattr(value, "__iter__") and hasattr(value, "__next__"):
+                        stream_key = key
+                        try:
+                            first_token = next(value)
+                        except StopIteration:
+                            first_token = None
+                        break
+
+        if stream_key is not None and first_token is not None:
+            result[stream_key] = itertools.chain([first_token], result[stream_key])
+
+        return result
 
     def infer(self, args: List[str]):
         """Run inference: infer <function> [args]"""
@@ -80,7 +102,7 @@ class InferenceHandler:
             self._display_inputs(function_name, args[1:])
             print()
 
-            result = func(**kwargs)
+            result = self._call_with_first_token_spinner(func, kwargs)
             self._display_inference_result(result)
 
         except Exception as e:
@@ -206,7 +228,7 @@ class InferenceHandler:
 
                     start_time = time.time()
                     try:
-                        result = func(**kwargs)
+                        result = self._call_with_first_token_spinner(func, kwargs)
                         stats = self._display_inference_result(result)
                         if stats:
                             self.repl.analytics.track(
