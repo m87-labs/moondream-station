@@ -4,8 +4,9 @@ import shlex
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List
-from prompt_toolkit import prompt
+from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.history import InMemoryHistory
 from rich import print as rprint
 from rich.panel import Panel
 
@@ -150,11 +151,15 @@ class InferenceHandler:
         self.repl.console.print(inference_panel)
         self.repl.console.print()
 
+        # Create a PromptSession with command history for up/down arrow navigation
+        history = InMemoryHistory()
+        session = PromptSession(history=history)
+
         while True:
             try:
                 # Create colored prompt using prompt_toolkit with ANSI codes
                 colored_prompt = f"\033[32m\033[1minference\033[0m ({model_info.name}) > "
-                user_input = prompt(ANSI(colored_prompt)).strip()
+                user_input = session.prompt(ANSI(colored_prompt)).strip()
 
                 if not user_input:
                     continue
