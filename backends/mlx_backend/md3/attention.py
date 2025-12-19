@@ -79,8 +79,22 @@ def dequantize_kv(
     else:
         k_biases_flat, v_biases_flat = None, None
 
-    k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=bits, group_size=group_size, mode=mode)
-    v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=bits, group_size=group_size, mode=mode)
+    k = mx.dequantize(
+        k_q_flat,
+        k_scales_flat,
+        k_biases_flat,
+        bits=bits,
+        group_size=group_size,
+        mode=mode,
+    )
+    v = mx.dequantize(
+        v_q_flat,
+        v_scales_flat,
+        v_biases_flat,
+        bits=bits,
+        group_size=group_size,
+        mode=mode,
+    )
 
     head_dim = k.shape[-1]
 
@@ -131,11 +145,17 @@ def _dequantize_kv_affine(
     v_scales_flat = v_scales.reshape(-1, v_scales.shape[-1])
     v_biases_flat = v_biases.reshape(-1, v_biases.shape[-1])
 
-    k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=4, group_size=64, mode="affine")
-    v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=4, group_size=64, mode="affine")
+    k = mx.dequantize(
+        k_q_flat, k_scales_flat, k_biases_flat, bits=4, group_size=64, mode="affine"
+    )
+    v = mx.dequantize(
+        v_q_flat, v_scales_flat, v_biases_flat, bits=4, group_size=64, mode="affine"
+    )
 
     head_dim = k.shape[-1]
-    return k.reshape(B, n_kv_heads, -1, head_dim), v.reshape(B, n_kv_heads, -1, head_dim)
+    return k.reshape(B, n_kv_heads, -1, head_dim), v.reshape(
+        B, n_kv_heads, -1, head_dim
+    )
 
 
 def _quantized_scaled_dot_product_attention(
@@ -285,6 +305,7 @@ class TextAttention(nn.Module):
         qkv_dim = dim + 2 * (dim * n_kv_heads // n_heads)
         self.qkv = nn.Linear(dim, qkv_dim)
         self.proj = nn.Linear(dim, dim)
+
         self.tau_wq = mx.zeros((n_heads, qkv_dim))
         self.tau_wv = mx.zeros((n_heads, qkv_dim))
         self.tau_alpha = mx.zeros((n_heads,))
