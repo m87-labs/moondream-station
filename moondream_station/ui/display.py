@@ -1,6 +1,9 @@
 import contextlib
 import platform
 import random
+import sys
+import threading
+import time
 from packaging.version import Version
 from rich.console import Console
 from rich.panel import Panel
@@ -11,6 +14,63 @@ from rich import print as rprint
 from .. import __version__
 
 from ..core.models import ModelManager
+
+
+class InferenceSpinner:
+    """A simple spinner for inference operations using \\|/- pattern"""
+
+    FRAMES = ["\\", "|", "/", "-"]
+
+    def __init__(self, message: str = ""):
+        self.message = message
+        self._running = False
+        self._thread = None
+        self._lock = threading.Lock()
+
+    def start(self):
+        """Start the spinner animation"""
+        with self._lock:
+            if self._running:
+                return
+            self._running = True
+        self._thread = threading.Thread(target=self._animate, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Stop the spinner and clear the line"""
+        with self._lock:
+            if not self._running:
+                return
+            self._running = False
+        if self._thread:
+            self._thread.join(timeout=0.2)
+        # Clear the spinner line
+        sys.stdout.write("\r" + " " * (len(self.message) + 4) + "\r")
+        sys.stdout.flush()
+
+    def _animate(self):
+        """Animation loop running in background thread"""
+        frame_idx = 0
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
+            frame = self.FRAMES[frame_idx % len(self.FRAMES)]
+            if self.message:
+                sys.stdout.write(f"\r{frame} {self.message}")
+            else:
+                sys.stdout.write(f"\r{frame}")
+            sys.stdout.flush()
+            frame_idx += 1
+            time.sleep(0.1)
+
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        return False
 
 
 class Display:

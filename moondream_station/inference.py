@@ -3,13 +3,14 @@ import inspect
 import shlex
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 from prompt_toolkit import prompt
 from prompt_toolkit.formatted_text import ANSI
 from rich import print as rprint
 from rich.panel import Panel
 
 from .core.config import PANEL_WIDTH
+from .ui.display import InferenceSpinner
 
 
 class InferenceHandler:
@@ -80,8 +81,14 @@ class InferenceHandler:
             self._display_inputs(function_name, args[1:])
             print()
 
-            result = func(**kwargs)
-            self._display_inference_result(result)
+            spinner = InferenceSpinner()
+            spinner.start()
+            try:
+                result = func(**kwargs)
+                self._display_inference_result(result, spinner)
+            except Exception:
+                spinner.stop()
+                raise
 
         except Exception as e:
             self.repl.analytics.track_error(
@@ -204,10 +211,12 @@ class InferenceHandler:
                     self._display_inputs(function_name, args[1:])
                     print()
 
+                    spinner = InferenceSpinner()
+                    spinner.start()
                     start_time = time.time()
                     try:
                         result = func(**kwargs)
-                        stats = self._display_inference_result(result)
+                        stats = self._display_inference_result(result, spinner)
                         if stats:
                             self.repl.analytics.track(
                                 "inference_complete",
@@ -222,6 +231,7 @@ class InferenceHandler:
                                 },
                             )
                     except Exception as e:
+                        spinner.stop()
                         self.repl.analytics.track_error(
                             type(e).__name__, str(e), f"inference_{function_name}"
                         )
@@ -268,21 +278,29 @@ class InferenceHandler:
             length = args[1]
             rprint(f"[dim]Length: {length}[/dim]")
 
-    def _display_inference_result(self, result):
+    def _display_inference_result(
+        self, result, spinner: Optional[InferenceSpinner] = None
+    ):
         """Display inference results with nice formatting"""
         if isinstance(result, dict):
             if result.get("error"):
+                if spinner:
+                    spinner.stop()
                 self.repl.display.error(f"Inference error: {result['error']}")
                 return
-
-            rprint("[dim]Output:[/dim]")
 
             token_count = 0
             start_time = time.time()
 
             for key, value in result.items():
                 if hasattr(value, "__iter__") and hasattr(value, "__next__"):
+                    first_token = True
                     for token in value:
+                        if first_token:
+                            if spinner:
+                                spinner.stop()
+                            rprint("[dim]Output:[/dim]")
+                            first_token = False
                         print(token, end="", flush=True)
                         token_count += 1
                     print()
@@ -301,6 +319,11 @@ class InferenceHandler:
                             tokens_per_sec if duration > 0 and token_count > 0 else 0
                         ),
                     }
+
+            # For non-streaming results, stop spinner before displaying
+            if spinner:
+                spinner.stop()
+            rprint("[dim]Output:[/dim]")
 
             total_tokens = 0
             for key, value in result.items():
