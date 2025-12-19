@@ -1,10 +1,33 @@
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional
+
+from functools import partial
+from typing import Optional, Tuple
+
+
+def _gather_sort(x: mx.array, indices: mx.array) -> Tuple[mx.array, mx.array, mx.array]:
+    *_, M = indices.shape
+    indices_flat = indices.flatten()
+    order = mx.argsort(indices_flat)
+    inv_order = mx.argsort(order)
+    return x.flatten(0, -3)[order // M], indices_flat[order], inv_order
+
+
+def _scatter_unsort(x: mx.array, inv_order: mx.array, shape: Tuple) -> mx.array:
+    x = x[inv_order]
+    return mx.unflatten(x, 0, shape)
+
+
+@partial(mx.compile, shapeless=True)
+def _gated_gelu_compiled(h: mx.array, g: mx.array) -> mx.array:
+    return nn.gelu(h) * (g + 1)
 
 
 class MoEMLP(nn.Module):
-    def __init__(self, dim: int, n_experts: int, expert_dim: int, experts_per_token: int):
+
+    def __init__(
+        self, dim: int, n_experts: int, expert_dim: int, experts_per_token: int
+    ):
         super().__init__()
         self.dim = dim
         self.n_experts = n_experts
@@ -21,64 +44,46 @@ class MoEMLP(nn.Module):
 
         router_logits = self.router(x_flat)
         topk_idxs = mx.argpartition(-router_logits, self.experts_per_token, axis=-1)
-        topk_idxs = topk_idxs[:, :self.experts_per_token]
+        topk_idxs = topk_idxs[:, : self.experts_per_token]
         topk_logits = mx.take_along_axis(router_logits, topk_idxs, axis=-1)
         topk_weights = mx.softmax(topk_logits, axis=-1)
 
-        if T == 1:
-            return self._forward_single_token(x_flat, topk_idxs, topk_weights, B, T, C)
-        else:
-            return self._forward_multi_token(x_flat, topk_idxs, topk_weights, B, T, C)
+        x_expanded = mx.expand_dims(x_flat, (-2, -3))
 
-    def _forward_single_token(self, x_flat, topk_idxs, topk_weights, B, T, C):
-        num_tokens = x_flat.shape[0]
-        top_k = self.experts_per_token
+        do_sort = topk_idxs.size >= 64
+        idx = topk_idxs
+        inv_order = None
+        if do_sort:
+            x_expanded, idx, inv_order = _gather_sort(x_expanded, topk_idxs)
 
-        flat_idxs = topk_idxs.reshape(-1)
-        flat_weights = topk_weights.reshape(-1)
+        h_full = mx.gather_mm(
+            x_expanded,
+            self.fc1.swapaxes(-1, -2),
+            rhs_indices=idx,
+            sorted_indices=do_sort,
+        )
 
-        w1_selected = self.fc1[flat_idxs]
-        w2_selected = self.fc2[flat_idxs]
+        h, g = mx.split(h_full, 2, axis=-1)
+        h = _gated_gelu_compiled(h, g)
 
-        x_expanded = mx.broadcast_to(x_flat[:, None, :], (num_tokens, top_k, C))
-        x_expanded = x_expanded.reshape(-1, C, 1)
+        expert_outs = mx.gather_mm(
+            h,
+            self.fc2.swapaxes(-1, -2),
+            rhs_indices=idx,
+            sorted_indices=do_sort,
+        )
 
-        x1_full = mx.matmul(w1_selected, x_expanded).squeeze(-1)
-        h, g = mx.split(x1_full, 2, axis=-1)
-        h = nn.gelu(h) * (g + 1)
+        if do_sort:
+            expert_outs = _scatter_unsort(expert_outs, inv_order, topk_idxs.shape)
 
-        expert_outs = mx.matmul(w2_selected, h[:, :, None]).squeeze(-1)
-        weighted_outs = expert_outs * flat_weights[:, None]
-        weighted_outs = weighted_outs.reshape(num_tokens, top_k, C)
+        expert_outs = expert_outs.squeeze(-2)
+        weighted_outs = expert_outs * topk_weights[:, :, None]
         mlp_out = weighted_outs.sum(axis=1)
 
         return mlp_out.reshape(B, T, C)
 
-    def _forward_multi_token(self, x_flat, topk_idxs, topk_weights, B, T, C):
-        num_tokens = x_flat.shape[0]
-        out = mx.zeros((num_tokens, C))
-
-        for expert_idx in range(self.n_experts):
-            expert_mask = topk_idxs == expert_idx
-            expert_weights = mx.where(expert_mask, topk_weights, mx.zeros_like(topk_weights))
-            token_weights = expert_weights.sum(axis=-1)
-
-            w1 = self.fc1[expert_idx]
-            w2 = self.fc2[expert_idx]
-
-            h_full = x_flat @ w1.T
-            h, g = mx.split(h_full, 2, axis=-1)
-            h = nn.gelu(h) * (g + 1)
-            expert_out = h @ w2.T
-
-            out = out + expert_out * token_weights[:, None]
-
-        return out.reshape(B, T, C)
-
 
 class QuantizedMoEMLP(nn.Module):
-    """MoE with quantized expert weights."""
-
     def __init__(
         self,
         dim: int,
@@ -99,7 +104,6 @@ class QuantizedMoEMLP(nn.Module):
         self.mode = mode
 
         self.router = nn.Linear(dim, n_experts)
-        # Quantized weights (set by from_float)
         self.fc1_q: Optional[mx.array] = None
         self.fc1_scales: Optional[mx.array] = None
         self.fc1_biases: Optional[mx.array] = None
@@ -115,7 +119,6 @@ class QuantizedMoEMLP(nn.Module):
         group_size: int = 64,
         mode: str = "affine",
     ) -> "QuantizedMoEMLP":
-        """Convert a float MoE to quantized."""
         q = cls(
             moe.dim,
             moe.n_experts,
@@ -127,16 +130,15 @@ class QuantizedMoEMLP(nn.Module):
         )
         q.router = moe.router
 
-        # Quantize each expert's fc1 and fc2
-        # Note: affine mode returns (w_q, scales, biases)
-        # mxfp4/mxfp8/nvfp4 modes return (w_q, scales) only
         has_biases = mode == "affine"
 
         fc1_qs, fc1_scales, fc1_biases = [], [], []
         fc2_qs, fc2_scales, fc2_biases = [], [], []
 
         for i in range(moe.n_experts):
-            result = mx.quantize(moe.fc1[i], bits=bits, group_size=group_size, mode=mode)
+            result = mx.quantize(
+                moe.fc1[i], bits=bits, group_size=group_size, mode=mode
+            )
             if has_biases:
                 w_q, s, b = result
             else:
@@ -147,7 +149,9 @@ class QuantizedMoEMLP(nn.Module):
             if b is not None:
                 fc1_biases.append(b)
 
-            result = mx.quantize(moe.fc2[i], bits=bits, group_size=group_size, mode=mode)
+            result = mx.quantize(
+                moe.fc2[i], bits=bits, group_size=group_size, mode=mode
+            )
             if has_biases:
                 w_q, s, b = result
             else:
@@ -165,8 +169,6 @@ class QuantizedMoEMLP(nn.Module):
         q.fc2_scales = mx.stack(fc2_scales)
         q.fc2_biases = mx.stack(fc2_biases) if fc2_biases else None
 
-        # CRITICAL: Evaluate quantized weights immediately to break reference to bf16 weights
-        # Without this, the lazy computation graph keeps bf16 weights alive
         arrays_to_eval = [q.fc1_q, q.fc1_scales, q.fc2_q, q.fc2_scales]
         if q.fc1_biases is not None:
             arrays_to_eval.extend([q.fc1_biases, q.fc2_biases])
@@ -184,109 +186,48 @@ class QuantizedMoEMLP(nn.Module):
         topk_logits = mx.take_along_axis(router_logits, topk_idxs, axis=-1)
         topk_weights = mx.softmax(topk_logits, axis=-1)
 
-        if T == 1:
-            return self._forward_single_token(x_flat, topk_idxs, topk_weights, B, T, C)
-        else:
-            return self._forward_multi_token(x_flat, topk_idxs, topk_weights, B, T, C)
+        x_expanded = mx.expand_dims(x_flat, (-2, -3))
 
-    def _forward_single_token(self, x_flat, topk_idxs, topk_weights, B, T, C):
-        num_tokens = x_flat.shape[0]
-        top_k = self.experts_per_token
+        do_sort = topk_idxs.size >= 64
+        idx = topk_idxs
+        inv_order = None
+        if do_sort:
+            x_expanded, idx, inv_order = _gather_sort(x_expanded, topk_idxs)
 
-        flat_idxs = topk_idxs.reshape(-1)
-        flat_weights = topk_weights.reshape(-1)
+        h_full = mx.gather_qmm(
+            x_expanded,
+            self.fc1_q,
+            self.fc1_scales,
+            self.fc1_biases,
+            rhs_indices=idx,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+            mode=self.mode,
+            sorted_indices=do_sort,
+        )
 
-        # Select quantized weights for chosen experts
-        fc1_q_sel = self.fc1_q[flat_idxs]
-        fc1_scales_sel = self.fc1_scales[flat_idxs]
-        fc1_biases_sel = self.fc1_biases[flat_idxs] if self.fc1_biases is not None else None
-        fc2_q_sel = self.fc2_q[flat_idxs]
-        fc2_scales_sel = self.fc2_scales[flat_idxs]
-        fc2_biases_sel = self.fc2_biases[flat_idxs] if self.fc2_biases is not None else None
+        h, g = mx.split(h_full, 2, axis=-1)
+        h = _gated_gelu_compiled(h, g)
 
-        # Expand input: (num_tokens, C) -> (num_tokens * top_k, C)
-        x_expanded = mx.broadcast_to(x_flat[:, None, :], (num_tokens, top_k, C))
-        x_expanded = x_expanded.reshape(-1, C)
+        expert_outs = mx.gather_qmm(
+            h,
+            self.fc2_q,
+            self.fc2_scales,
+            self.fc2_biases,
+            rhs_indices=idx,
+            transpose=True,
+            group_size=self.group_size,
+            bits=self.bits,
+            mode=self.mode,
+            sorted_indices=do_sort,
+        )
 
-        # fc1: (num_tokens * top_k, C) @ (2 * expert_dim, C).T -> (num_tokens * top_k, 2 * expert_dim)
-        # Use loop since quantized_matmul doesn't support batched weights
-        x1_results = []
-        for i in range(num_tokens * top_k):
-            x1 = mx.quantized_matmul(
-                x_expanded[i : i + 1],
-                fc1_q_sel[i],
-                fc1_scales_sel[i],
-                fc1_biases_sel[i] if fc1_biases_sel is not None else None,
-                transpose=True,
-                group_size=self.group_size,
-                bits=self.bits,
-                mode=self.mode,
-            )
-            x1_results.append(x1)
-        x1_full = mx.concatenate(x1_results, axis=0)
+        if do_sort:
+            expert_outs = _scatter_unsort(expert_outs, inv_order, topk_idxs.shape)
 
-        h, g = mx.split(x1_full, 2, axis=-1)
-        h = nn.gelu(h) * (g + 1)
-
-        # fc2: (num_tokens * top_k, expert_dim) @ (C, expert_dim).T -> (num_tokens * top_k, C)
-        expert_results = []
-        for i in range(num_tokens * top_k):
-            out = mx.quantized_matmul(
-                h[i : i + 1],
-                fc2_q_sel[i],
-                fc2_scales_sel[i],
-                fc2_biases_sel[i] if fc2_biases_sel is not None else None,
-                transpose=True,
-                group_size=self.group_size,
-                bits=self.bits,
-                mode=self.mode,
-            )
-            expert_results.append(out)
-        expert_outs = mx.concatenate(expert_results, axis=0)
-
-        weighted_outs = expert_outs * flat_weights[:, None]
-        weighted_outs = weighted_outs.reshape(num_tokens, top_k, C)
+        expert_outs = expert_outs.squeeze(-2)
+        weighted_outs = expert_outs * topk_weights[:, :, None]
         mlp_out = weighted_outs.sum(axis=1)
 
         return mlp_out.reshape(B, T, C)
-
-    def _forward_multi_token(self, x_flat, topk_idxs, topk_weights, B, T, C):
-        num_tokens = x_flat.shape[0]
-        out = mx.zeros((num_tokens, C))
-
-        for expert_idx in range(self.n_experts):
-            expert_mask = topk_idxs == expert_idx
-            expert_weights = mx.where(expert_mask, topk_weights, mx.zeros_like(topk_weights))
-            token_weights = expert_weights.sum(axis=-1)
-
-            # fc1: x @ w1.T using quantized_matmul
-            fc1_bias = self.fc1_biases[expert_idx] if self.fc1_biases is not None else None
-            h_full = mx.quantized_matmul(
-                x_flat,
-                self.fc1_q[expert_idx],
-                self.fc1_scales[expert_idx],
-                fc1_bias,
-                transpose=True,
-                group_size=self.group_size,
-                bits=self.bits,
-                mode=self.mode,
-            )
-            h, g = mx.split(h_full, 2, axis=-1)
-            h = nn.gelu(h) * (g + 1)
-
-            # fc2: h @ w2.T using quantized_matmul
-            fc2_bias = self.fc2_biases[expert_idx] if self.fc2_biases is not None else None
-            expert_out = mx.quantized_matmul(
-                h,
-                self.fc2_q[expert_idx],
-                self.fc2_scales[expert_idx],
-                fc2_bias,
-                transpose=True,
-                group_size=self.group_size,
-                bits=self.bits,
-                mode=self.mode,
-            )
-
-            out = out + expert_out * token_weights[:, None]
-
-        return out.reshape(B, T, C)

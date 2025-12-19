@@ -1,3 +1,5 @@
+from functools import partial
+
 import mlx.core as mx
 import mlx.nn as nn
 from typing import Optional, Tuple
@@ -19,24 +21,9 @@ def quantize_kv(
     group_size: int = 64,
     mode: str = "affine",
 ) -> Tuple:
-    """
-    Quantize K and V tensors for cache storage.
-
-    Args:
-        k: Key tensor (B, n_kv_heads, T, head_dim)
-        v: Value tensor (B, n_kv_heads, T, head_dim)
-        bits: Quantization bits (4 or 8)
-        group_size: Quantization group size
-        mode: Quantization mode ("affine", "mxfp4", etc.)
-
-    Returns:
-        Tuple of (k_q, k_scales, k_biases, v_q, v_scales, v_biases)
-        Note: biases are zeros for non-affine modes (for compiled function compatibility)
-    """
     B, n_kv_heads, T, head_dim = k.shape
     has_biases = mode == "affine"
 
-    # Reshape for quantization: (B, n_kv_heads, T, head_dim) -> (B * n_kv_heads * T, head_dim)
     k_flat = k.reshape(-1, head_dim)
     v_flat = v.reshape(-1, head_dim)
 
@@ -50,7 +37,6 @@ def quantize_kv(
         k_q, k_scales = k_result
         v_q, v_scales = v_result
 
-    # Reshape back: quantized shape is (B * n_kv_heads * T, packed_dim)
     packed_dim = k_q.shape[-1]
     scales_dim = k_scales.shape[-1]
 
@@ -63,7 +49,6 @@ def quantize_kv(
         k_biases = k_biases.reshape(B, n_kv_heads, T, scales_dim)
         v_biases = v_biases.reshape(B, n_kv_heads, T, scales_dim)
     else:
-        # For non-affine modes, return zero biases for compiled function compatibility
         k_biases = mx.zeros((B, n_kv_heads, T, scales_dim))
         v_biases = mx.zeros((B, n_kv_heads, T, scales_dim))
 
@@ -81,15 +66,8 @@ def dequantize_kv(
     group_size: int = 64,
     mode: str = "affine",
 ) -> Tuple[mx.array, mx.array]:
-    """
-    Dequantize K and V tensors from cache.
-
-    Returns:
-        Tuple of (k, v) at full precision
-    """
     B, n_kv_heads, T, packed_dim = k_q.shape
 
-    # Reshape for dequantization
     k_q_flat = k_q.reshape(-1, packed_dim)
     k_scales_flat = k_scales.reshape(-1, k_scales.shape[-1])
     v_q_flat = v_q.reshape(-1, packed_dim)
@@ -104,13 +82,154 @@ def dequantize_kv(
     k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=bits, group_size=group_size, mode=mode)
     v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=bits, group_size=group_size, mode=mode)
 
-    # Infer head_dim from dequantized shape
     head_dim = k.shape[-1]
 
     k = k.reshape(B, n_kv_heads, T, head_dim)
     v = v.reshape(B, n_kv_heads, T, head_dim)
 
     return k, v
+
+
+@partial(mx.compile, shapeless=True)
+def _quantize_kv_affine(k: mx.array, v: mx.array) -> Tuple:
+    B, n_kv_heads, T, head_dim = k.shape
+
+    k_flat = k.reshape(-1, head_dim)
+    v_flat = v.reshape(-1, head_dim)
+
+    k_q, k_scales, k_biases = mx.quantize(k_flat, bits=4, group_size=64, mode="affine")
+    v_q, v_scales, v_biases = mx.quantize(v_flat, bits=4, group_size=64, mode="affine")
+
+    packed_dim = k_q.shape[-1]
+    scales_dim = k_scales.shape[-1]
+
+    return (
+        k_q.reshape(B, n_kv_heads, -1, packed_dim),
+        k_scales.reshape(B, n_kv_heads, -1, scales_dim),
+        k_biases.reshape(B, n_kv_heads, -1, scales_dim),
+        v_q.reshape(B, n_kv_heads, -1, packed_dim),
+        v_scales.reshape(B, n_kv_heads, -1, scales_dim),
+        v_biases.reshape(B, n_kv_heads, -1, scales_dim),
+    )
+
+
+@partial(mx.compile, shapeless=True)
+def _dequantize_kv_affine(
+    k_q: mx.array,
+    k_scales: mx.array,
+    k_biases: mx.array,
+    v_q: mx.array,
+    v_scales: mx.array,
+    v_biases: mx.array,
+) -> Tuple[mx.array, mx.array]:
+    B, n_kv_heads, T, packed_dim = k_q.shape
+
+    k_q_flat = k_q.reshape(-1, packed_dim)
+    k_scales_flat = k_scales.reshape(-1, k_scales.shape[-1])
+    k_biases_flat = k_biases.reshape(-1, k_biases.shape[-1])
+    v_q_flat = v_q.reshape(-1, packed_dim)
+    v_scales_flat = v_scales.reshape(-1, v_scales.shape[-1])
+    v_biases_flat = v_biases.reshape(-1, v_biases.shape[-1])
+
+    k = mx.dequantize(k_q_flat, k_scales_flat, k_biases_flat, bits=4, group_size=64, mode="affine")
+    v = mx.dequantize(v_q_flat, v_scales_flat, v_biases_flat, bits=4, group_size=64, mode="affine")
+
+    head_dim = k.shape[-1]
+    return k.reshape(B, n_kv_heads, -1, head_dim), v.reshape(B, n_kv_heads, -1, head_dim)
+
+
+def _quantized_scaled_dot_product_attention(
+    queries: mx.array,
+    q_keys: Tuple[mx.array, mx.array, mx.array],
+    q_values: Tuple[mx.array, mx.array, mx.array],
+    scale: float,
+    mask: Optional[mx.array],
+    group_size: int = 64,
+    bits: int = 4,
+) -> mx.array:
+    B, n_q_heads, q_len, head_dim = queries.shape
+    if len(q_keys) == 2:
+        k_q, k_scales = q_keys
+        k_biases = None
+    else:
+        k_q, k_scales, k_biases = q_keys
+
+    if len(q_values) == 2:
+        v_q, v_scales = q_values
+        v_biases = None
+    else:
+        v_q, v_scales, v_biases = q_values
+
+    n_kv_heads = k_q.shape[-3]
+    n_repeats = n_q_heads // n_kv_heads
+
+    queries = queries * scale
+
+    if n_repeats > 1:
+        queries = queries.reshape(B, n_kv_heads, n_repeats, q_len, head_dim)
+        k_q = mx.expand_dims(k_q, axis=-3)
+        k_scales = mx.expand_dims(k_scales, axis=-3)
+        k_biases = mx.expand_dims(k_biases, axis=-3)
+        v_q = mx.expand_dims(v_q, axis=-3)
+        v_scales = mx.expand_dims(v_scales, axis=-3)
+        v_biases = mx.expand_dims(v_biases, axis=-3)
+
+    if k_biases is None:
+        scores = mx.quantized_matmul(
+            queries,
+            k_q,
+            k_scales,
+            transpose=True,
+            group_size=group_size,
+            bits=bits,
+        )
+    else:
+        scores = mx.quantized_matmul(
+            queries,
+            k_q,
+            k_scales,
+            k_biases,
+            transpose=True,
+            group_size=group_size,
+            bits=bits,
+        )
+
+    if mask is not None:
+        if isinstance(mask, str):
+            qL, kL = scores.shape[-2:]
+            q_indices = mx.arange(kL - qL, kL)
+            k_indices = mx.arange(kL)
+            mask = q_indices[:, None] >= k_indices[None]
+        if mask.dtype == mx.bool_:
+            scores = mx.where(mask, scores, mx.finfo(scores.dtype).min)
+        else:
+            scores = scores + mask
+
+    scores = mx.softmax(scores, axis=-1, precise=True)
+    if v_biases is None:
+        out = mx.quantized_matmul(
+            scores,
+            v_q,
+            v_scales,
+            transpose=False,
+            group_size=group_size,
+            bits=bits,
+        )
+    else:
+        out = mx.quantized_matmul(
+            scores,
+            v_q,
+            v_scales,
+            v_biases,
+            transpose=False,
+            group_size=group_size,
+            bits=bits,
+        )
+
+    if n_repeats > 1:
+        out = out.reshape(B, n_q_heads, q_len, head_dim)
+
+    return out
 
 
 def apply_rotary_emb(x: mx.array, freqs_cis: mx.array, positions: mx.array) -> mx.array:
@@ -162,9 +281,11 @@ class TextAttention(nn.Module):
         self.head_dim = dim // n_heads
         self.scale = self.head_dim ** -0.5
 
+        rotary_dim = self.head_dim // 2
         qkv_dim = dim + 2 * (dim * n_kv_heads // n_heads)
         self.qkv = nn.Linear(dim, qkv_dim)
         self.proj = nn.Linear(dim, dim)
+        self.rope = nn.RoPE(rotary_dim, traditional=False, base=1500000.0)
 
         self.tau_wq = mx.zeros((n_heads, qkv_dim))
         self.tau_wv = mx.zeros((n_heads, qkv_dim))
@@ -177,25 +298,7 @@ class TextAttention(nn.Module):
         positions: mx.array,
         mask: Optional[mx.array] = None,
         cache: Optional[Tuple] = None,
-        cache_pos: int = 0,
-        kv_quant: bool = False,
     ) -> Tuple[mx.array, Tuple]:
-        """
-        Args:
-            x: Input tensor (B, T, C)
-            freqs_cis: Precomputed rotary frequencies
-            positions: Position indices for this input
-            mask: Attention mask
-            cache: Pre-allocated cache tensors. Either:
-                   - (k_cache, v_cache) for regular cache
-                   - (k_q, k_scales, k_biases, v_q, v_scales, v_biases) for quantized cache
-            cache_pos: Current position in the cache (where to write new k,v)
-            kv_quant: If True, use int4 quantized KV cache (default settings: bits=4, group_size=64, mode=affine)
-
-        Returns:
-            output: Attention output (B, T, C)
-            cache: Updated cache (same structure as input)
-        """
         B, T, C = x.shape
         qkv_out = self.qkv(x)
 
@@ -220,70 +323,41 @@ class TextAttention(nn.Module):
         q = q * tau_q
         v = v * tau_v
 
-        q = apply_rotary_emb(q, freqs_cis, positions)
-        k = apply_rotary_emb(k, freqs_cis, positions)
+        rope_offset = cache.offset if cache is not None else 0
+        q = self.rope(q, offset=rope_offset)
+        k = self.rope(k, offset=rope_offset)
 
         if cache is not None:
-            if kv_quant:
-                # Quantized cache: (k_q, k_scales, k_biases, v_q, v_scales, v_biases)
-                k_q_cache, k_scales_cache, k_biases_cache, v_q_cache, v_scales_cache, v_biases_cache = cache
+            k, v = cache.update_and_fetch(k, v)
+            new_cache = cache
+        else:
+            new_cache = None
 
-                # Quantize new k, v for storage (uses default int4 affine settings)
-                new_k_q, new_k_scales, new_k_biases, new_v_q, new_v_scales, new_v_biases = quantize_kv(k, v)
-
-                # Update cache at current position
-                k_q_cache = k_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_q)
-                k_scales_cache = k_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_scales)
-                k_biases_cache = k_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_k_biases)
-                v_q_cache = v_q_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_q)
-                v_scales_cache = v_scales_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_scales)
-                v_biases_cache = v_biases_cache.at[:, :, cache_pos : cache_pos + T, :].add(new_v_biases)
-
-                # For attention: dequantize only historical cache, keep current token in float
-                # This avoids redundant quantize->dequantize for current token and reduces
-                # dequantization overhead from O(cache_pos + T) to O(cache_pos)
-                if cache_pos > 0:
-                    k_q_hist = k_q_cache[:, :, :cache_pos, :]
-                    k_scales_hist = k_scales_cache[:, :, :cache_pos, :]
-                    k_biases_hist = k_biases_cache[:, :, :cache_pos, :]
-                    v_q_hist = v_q_cache[:, :, :cache_pos, :]
-                    v_scales_hist = v_scales_cache[:, :, :cache_pos, :]
-                    v_biases_hist = v_biases_cache[:, :, :cache_pos, :]
-
-                    k_hist, v_hist = dequantize_kv(
-                        k_q_hist, k_scales_hist, k_biases_hist,
-                        v_q_hist, v_scales_hist, v_biases_hist,
-                    )
-                    # Concatenate historical (dequantized) with current (already float)
-                    k = mx.concatenate([k_hist, k], axis=2)
-                    v = mx.concatenate([v_hist, v], axis=2)
-                # else: cache_pos == 0, just use current k, v as-is (no history to dequantize)
-
-                new_cache = (k_q_cache, k_scales_cache, k_biases_cache, v_q_cache, v_scales_cache, v_biases_cache)
+        if cache is not None and hasattr(cache, "bits"):
+            kv_len = cache.offset
+            if mask is not None:
+                mask_slice = mask[:, :, :, :kv_len]
             else:
-                # Regular cache: (k_cache, v_cache)
-                k_cache, v_cache = cache
-                # Update cache at current position (creates new array, MLX doesn't have in-place update)
-                k_cache = k_cache.at[:, :, cache_pos : cache_pos + T, :].add(k)
-                v_cache = v_cache.at[:, :, cache_pos : cache_pos + T, :].add(v)
-                # Read all cached k,v up to current position
-                k = k_cache[:, :, : cache_pos + T, :]
-                v = v_cache[:, :, : cache_pos + T, :]
-                new_cache = (k_cache, v_cache)
-        else:
-            new_cache = (k, v)
+                mask_slice = None
 
-        if self.n_kv_heads != self.n_heads:
-            n_rep = self.n_heads // self.n_kv_heads
-            k = mx.repeat(k, n_rep, axis=1)
-            v = mx.repeat(v, n_rep, axis=1)
-
-        if mask is not None:
-            kv_len = k.shape[2]
-            mask_slice = mask[:, :, :, :kv_len]
-            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale, mask=mask_slice)
+            out = _quantized_scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                scale=self.scale,
+                mask=mask_slice,
+                group_size=cache.group_size,
+                bits=cache.bits,
+            )
         else:
-            out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
+            if mask is not None:
+                kv_len = k.shape[2]
+                mask_slice = mask[:, :, :, :kv_len]
+                out = mx.fast.scaled_dot_product_attention(
+                    q, k, v, scale=self.scale, mask=mask_slice
+                )
+            else:
+                out = mx.fast.scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         out = out.transpose(0, 2, 1, 3).reshape(B, T, C)
         return self.proj(out), new_cache

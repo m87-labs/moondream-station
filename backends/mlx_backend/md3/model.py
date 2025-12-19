@@ -1,4 +1,5 @@
 import gc
+from functools import partial
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -11,12 +12,14 @@ from .vision import VisionEncoder
 from .text import TextModel
 from .region import RegionModel, SpatialRefs, bin_to_size
 from .image_crops import prepare_crops
+from .cache import KVCache, QuantizedKVCache
 
 
 DEFAULT_MAX_TOKENS = 768
 DEFAULT_TEMPERATURE = 0.5
 DEFAULT_TOP_P = 0.9
 DEFAULT_MAX_OBJECTS = 150
+DISABLE_KV_QUANT = True
 
 
 TextSamplingSettings = TypedDict(
@@ -34,12 +37,10 @@ ObjectSamplingSettings = TypedDict(
 
 DEFAULT_MAX_SEQ_LEN = 1024
 
-# Module-level cache for compiled functions (kept outside model to avoid load_weights issues)
 _compiled_cache: Dict[int, Dict[str, any]] = {}
 
 
 def _get_compiled(model, name: str, fn):
-    """Get or create a compiled version of fn, cached by model instance."""
     model_id = id(model)
     if model_id not in _compiled_cache:
         _compiled_cache[model_id] = {}
@@ -50,13 +51,29 @@ def _get_compiled(model, name: str, fn):
 
 
 def _clear_compiled(model, name: str = None):
-    """Clear compiled cache for a model (or specific function)."""
     model_id = id(model)
     if model_id in _compiled_cache:
         if name is None:
             del _compiled_cache[model_id]
         elif name in _compiled_cache[model_id]:
             del _compiled_cache[model_id][name]
+
+
+@partial(mx.compile, inputs=mx.random.state, outputs=mx.random.state)
+def _sample_top_p(logits: mx.array, temp: float, top_p: float) -> mx.array:
+    probs = mx.softmax(logits / temp, axis=-1)
+
+    sorted_indices = mx.argsort(-probs, axis=-1)
+    sorted_probs = mx.take_along_axis(probs, sorted_indices, axis=-1)
+    cumsum = mx.cumsum(sorted_probs, axis=-1)
+
+    mask = (cumsum - sorted_probs) > top_p
+    sorted_probs = mx.where(mask, 0.0, sorted_probs)
+    sorted_probs = sorted_probs / mx.sum(sorted_probs, axis=-1, keepdims=True)
+
+    inverse_indices = mx.argsort(sorted_indices, axis=-1)
+    probs = mx.take_along_axis(sorted_probs, inverse_indices, axis=-1)
+    return mx.random.categorical(mx.log(probs + 1e-12), axis=-1)
 
 
 class Moondream(nn.Module):
@@ -82,90 +99,49 @@ class Moondream(nn.Module):
         )
         attn_mask = attn_mask | prefix_mask_padded
         self.attn_mask = attn_mask
-        self._kv_quant = False  # Set to True by quantize_experts()
+        self._kv_quant = False
 
     def _get_vision_compiled(self):
-        """Get compiled vision encoder (lazy compilation)."""
         return _get_compiled(self, "vision", self.vision)
 
     def _get_decode_step_compiled(self):
-        """Get compiled decode step function (lazy compilation).
-
-        This is separate from self.text because TextModel.__call__ has mx.eval()
-        for memory management during prefill, which is incompatible with mx.compile().
-        For decode (single token), we don't need mx.eval(), so we can compile this path.
-        """
-        # Check cache first to avoid creating function unnecessarily
         model_id = id(self)
         if model_id in _compiled_cache and "decode_step" in _compiled_cache[model_id]:
             return _compiled_cache[model_id]["decode_step"]
 
-        # Create decode step function (same as TextModel.__call__ but without mx.eval)
         text = self.text
-        def decode_step(embedding, positions, mask, cache, cache_pos, kv_quant):
+        def decode_step(embedding, positions, mask, cache):
             x = embedding
             new_caches = []
             for i, block in enumerate(text.blocks):
                 block_cache = cache[i] if cache is not None else None
-                x, new_cache = block(x, text.freqs_cis, positions, mask, block_cache, cache_pos, kv_quant)
+                x, new_cache = block(x, text.freqs_cis, positions, mask, block_cache)
                 new_caches.append(new_cache)
             return x, new_caches
 
         return _get_compiled(self, "decode_step", decode_step)
 
     def quantize_experts(self) -> None:
-        """Quantize MoE expert weights to int4 and enable quantized KV cache."""
         from .moe import QuantizedMoEMLP
 
         for block in self.text.blocks:
             if hasattr(block, "is_moe") and block.is_moe:
                 block.mlp = QuantizedMoEMLP.from_float(block.mlp)
 
-        # Force garbage collection to free old MoE bf16 weights
         gc.collect()
 
-        # Enable quantized KV cache for the quantized model
         self._kv_quant = True
 
-        # Invalidate compiled cache since model structure changed
         _clear_compiled(self, "decode_step")
 
-    def _allocate_kv_cache(self, batch_size: int = 1) -> List[Tuple]:
-        """Pre-allocate KV cache for all layers.
-
-        Returns:
-            List of cache tuples per layer. Either:
-            - (k, v) for regular cache
-            - (k_q, k_scales, k_biases, v_q, v_scales, v_biases) for quantized cache
-        """
+    def _allocate_kv_cache(self, batch_size: int = 1) -> List:
         n_layers = len(self.text.blocks)
-        n_kv_heads = self.config.text.n_kv_heads
-        head_dim = self.config.text.dim // self.config.text.n_heads
+        kv_quant = self._kv_quant and not DISABLE_KV_QUANT
 
-        cache = []
+        if kv_quant:
+            return [QuantizedKVCache(group_size=64, bits=4) for _ in range(n_layers)]
 
-        if self._kv_quant:
-            # Allocate quantized cache (int4: bits=4, group_size=64)
-            packed_dim = head_dim // 8  # 4-bit: 8 values per uint32
-            scales_dim = head_dim // 64  # group_size=64
-
-            for _ in range(n_layers):
-                k_q = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, packed_dim), dtype=mx.uint32)
-                k_scales = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-                k_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-                v_q = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, packed_dim), dtype=mx.uint32)
-                v_scales = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-                v_biases = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, scales_dim))
-
-                cache.append((k_q, k_scales, k_biases, v_q, v_scales, v_biases))
-        else:
-            # Allocate regular bf16 cache
-            for _ in range(n_layers):
-                k = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, head_dim))
-                v = mx.zeros((batch_size, n_kv_heads, self.max_seq_len, head_dim))
-                cache.append((k, v))
-
-        return cache
+        return [KVCache() for _ in range(n_layers)]
 
     def _run_vision_encoder(self, image: Image.Image) -> mx.array:
         crops, tiling = prepare_crops(
@@ -176,58 +152,37 @@ class Moondream(nn.Module):
         )
         return self._get_vision_compiled()(crops, tiling)
 
-    def _apply_top_p(self, probs: mx.array, top_p: float) -> mx.array:
-        """Apply top-p (nucleus) filtering to probability distribution."""
-        sorted_indices = mx.argsort(probs, axis=-1)[:, ::-1]
-        sorted_probs = mx.take_along_axis(probs, sorted_indices, axis=-1)
-        cumsum = mx.cumsum(sorted_probs, axis=-1)
-        mask = cumsum - sorted_probs > top_p
-        sorted_probs = mx.where(mask, mx.zeros_like(sorted_probs), sorted_probs)
-        sorted_probs = sorted_probs / sorted_probs.sum(axis=-1, keepdims=True)
-        inverse_indices = mx.argsort(sorted_indices, axis=-1)
-        return mx.take_along_axis(sorted_probs, inverse_indices, axis=-1)
-
     def _sample_token(self, logits: mx.array, temperature: float, top_p: float) -> mx.array:
-        """Sample a token using temperature scaling and top-p filtering."""
         if temperature == 0:
             return mx.argmax(logits, axis=-1, keepdims=True)
-
-        probs = mx.softmax(logits / temperature, axis=-1)
-        probs = self._apply_top_p(probs, top_p)
-        log_probs = mx.where(probs > 0, mx.log(probs), mx.array(float('-inf')))
-        next_token = mx.random.categorical(log_probs, axis=-1)
-        return next_token[:, None]
+        return _sample_top_p(logits, temperature, top_p)[:, None]
 
     def _prefill(
         self,
         embeddings: mx.array,
-        cache_pos: int,
-        cache: List[Tuple],
-    ) -> Tuple[mx.array, List[Tuple]]:
-        """Prefill the cache with embeddings starting at cache_pos.
-
-        Uses self.text directly (not compiled) because TextModel.__call__ has
-        mx.eval() calls for memory management during prefill.
-        """
+        cache: List,
+    ) -> Tuple[mx.array, List]:
         seq_len = embeddings.shape[1]
+        cache_pos = cache[0].offset if cache is not None else 0
         positions = mx.arange(cache_pos, cache_pos + seq_len)
         mask = self.attn_mask[:, :, cache_pos:cache_pos + seq_len, :]
-        hidden, new_cache = self.text(embeddings, positions, mask, cache, cache_pos, self._kv_quant)
+        hidden, new_cache = self.text(embeddings, positions, mask, cache)
         return hidden, new_cache
 
     def _decode_one(
         self,
         embedding: mx.array,
-        cache_pos: int,
-        cache: List[Tuple],
-    ) -> Tuple[mx.array, mx.array, List[Tuple]]:
-        """Decode one token at cache_pos.
-
-        Uses compiled decode step for faster token generation.
-        """
+        cache: List,
+    ) -> Tuple[mx.array, mx.array, List]:
+        cache_pos = cache[0].offset if cache is not None else 0
         positions = mx.array([cache_pos])
-        mask = self.attn_mask[:, :, cache_pos:cache_pos+1, :]
-        hidden, new_cache = self._get_decode_step_compiled()(embedding, positions, mask, cache, cache_pos, self._kv_quant)
+        mask = None
+        if cache is not None and isinstance(cache[0], (KVCache, QuantizedKVCache)):
+            hidden, new_cache = self.text(embedding, positions, mask, cache)
+        else:
+            hidden, new_cache = self._get_decode_step_compiled()(
+                embedding, positions, mask, cache
+            )
         logits = self.text.generate_logits(hidden)
         return logits, hidden, new_cache
 
@@ -251,8 +206,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
-        pos = inputs_embeds.shape[1]
+        _, cache = self._prefill(inputs_embeds, cache)
 
         prompt_toks = self.config.tokenizer.templates["query"]["prefix"]
         prompt_toks = prompt_toks + self.tokenizer.encode(question).ids
@@ -264,32 +218,27 @@ class Moondream(nn.Module):
             prompt_tokens = mx.array([prompt_toks])
             prompt_emb = self.text.embed(prompt_tokens)
 
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
-            pos += prompt_emb.shape[1]
+            hidden, cache = self._prefill(prompt_emb, cache)
 
-            reasoning_text, pos, cache = self._generate_reasoning(
-                hidden, pos, cache, settings
-            )
+            reasoning_text, cache = self._generate_reasoning(hidden, cache, settings)
             result["reasoning"] = {"text": reasoning_text, "grounding": []}
 
             suffix_toks = self.config.tokenizer.templates["query"]["suffix"]
             prompt_tokens = mx.array([suffix_toks])
             prompt_emb = self.text.embed(prompt_tokens)
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
+            hidden, cache = self._prefill(prompt_emb, cache)
             logits = self.text.generate_logits(hidden)
             next_token = self._sample_token(logits, temperature, top_p)
-            pos += prompt_emb.shape[1]
         else:
             prompt_toks = prompt_toks + self.config.tokenizer.templates["query"]["suffix"]
             prompt_tokens = mx.array([prompt_toks])
             prompt_emb = self.text.embed(prompt_tokens)
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
+            hidden, cache = self._prefill(prompt_emb, cache)
             logits = self.text.generate_logits(hidden)
             next_token = self._sample_token(logits, temperature, top_p)
-            pos += prompt_emb.shape[1]
 
         def generator():
-            nonlocal next_token, pos, cache
+            nonlocal next_token, cache
             eos_id = self.config.tokenizer.eos_id
             tokens = []
             generated = 0
@@ -298,16 +247,16 @@ class Moondream(nn.Module):
                 token_id = int(next_token[0, 0])
                 tokens.append(token_id)
 
+                next_emb = self.text.embed(next_token)
+                logits, _, cache = self._decode_one(next_emb, cache)
+                next_token = self._sample_token(logits, temperature, top_p)
+                mx.async_eval(next_token)
+                generated += 1
+
                 text = self.tokenizer.decode(tokens)
                 if len(text) > 0:
                     yield text
                     tokens = []
-
-                next_emb = self.text.embed(next_token)
-                logits, _, cache = self._decode_one(next_emb, pos, cache)
-                next_token = self._sample_token(logits, temperature, top_p)
-                pos += 1
-                generated += 1
 
             if tokens:
                 yield self.tokenizer.decode(tokens)
@@ -322,10 +271,9 @@ class Moondream(nn.Module):
     def _generate_reasoning(
         self,
         hidden: mx.array,
-        pos: int,
-        cache: List[Tuple[mx.array, mx.array]],
+        cache: List,
         settings: Optional[TextSamplingSettings] = None,
-    ) -> Tuple[str, int, List]:
+    ) -> Tuple[str, List]:
         max_tokens = settings.get("max_tokens", DEFAULT_MAX_TOKENS) if settings else DEFAULT_MAX_TOKENS
         temperature = settings.get("temperature", DEFAULT_TEMPERATURE) if settings else DEFAULT_TEMPERATURE
         top_p = settings.get("top_p", DEFAULT_TOP_P) if settings else DEFAULT_TOP_P
@@ -348,12 +296,12 @@ class Moondream(nn.Module):
             else:
                 next_emb = self.text.embed(next_token)
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
+            logits, hidden, cache = self._decode_one(next_emb, cache)
             next_token = self._sample_token(logits, temperature, top_p)
-            pos += 1
+            mx.async_eval(next_token)
             generated += 1
 
-        return self.tokenizer.decode(tokens), pos, cache
+        return self.tokenizer.decode(tokens), cache
 
     def caption(
         self,
@@ -376,19 +324,17 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
-        pos = inputs_embeds.shape[1]
+        _, cache = self._prefill(inputs_embeds, cache)
 
         prompt_toks = self.config.tokenizer.templates["caption"][length]
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, cache)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, temperature, top_p)
-        pos += prompt_emb.shape[1]
 
         def generator():
-            nonlocal next_token, pos, cache
+            nonlocal next_token, cache
             eos_id = self.config.tokenizer.eos_id
             tokens = []
             generated = 0
@@ -397,16 +343,16 @@ class Moondream(nn.Module):
                 token_id = int(next_token[0, 0])
                 tokens.append(token_id)
 
+                next_emb = self.text.embed(next_token)
+                logits, _, cache = self._decode_one(next_emb, cache)
+                next_token = self._sample_token(logits, temperature, top_p)
+                mx.async_eval(next_token)
+                generated += 1
+
                 text = self.tokenizer.decode(tokens)
                 if len(text) > 0:
                     yield text
                     tokens = []
-
-                next_emb = self.text.embed(next_token)
-                logits, _, cache = self._decode_one(next_emb, pos, cache)
-                next_token = self._sample_token(logits, temperature, top_p)
-                pos += 1
-                generated += 1
 
             if tokens:
                 yield self.tokenizer.decode(tokens)
@@ -432,8 +378,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
-        pos = inputs_embeds.shape[1]
+        _, cache = self._prefill(inputs_embeds, cache)
 
         prompt_toks = (
             self.config.tokenizer.templates["detect"]["prefix"]
@@ -442,13 +387,12 @@ class Moondream(nn.Module):
         )
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, cache)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, 0, 0)
-        pos += prompt_emb.shape[1]
 
         objects = self._generate_points(
-            hidden[:, -1:, :], next_token, pos, cache, include_size=True, max_objects=max_objects
+            hidden[:, -1:, :], next_token, cache, include_size=True, max_objects=max_objects
         )
 
         return {"objects": objects}
@@ -469,8 +413,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
-        pos = inputs_embeds.shape[1]
+        _, cache = self._prefill(inputs_embeds, cache)
 
         prompt_toks = (
             self.config.tokenizer.templates["point"]["prefix"]
@@ -479,13 +422,12 @@ class Moondream(nn.Module):
         )
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, cache)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, 0, 0)
-        pos += prompt_emb.shape[1]
 
         points = self._generate_points(
-            hidden[:, -1:, :], next_token, pos, cache, include_size=False, max_objects=max_objects
+            hidden[:, -1:, :], next_token, cache, include_size=False, max_objects=max_objects
         )
 
         return {"points": points}
@@ -494,8 +436,7 @@ class Moondream(nn.Module):
         self,
         hidden: mx.array,
         next_token: mx.array,
-        pos: int,
-        cache: List[Tuple[mx.array, mx.array]],
+        cache: List,
         include_size: bool,
         max_objects: int,
     ) -> List[Dict]:
@@ -509,16 +450,14 @@ class Moondream(nn.Module):
             x_coord = mx.array([[x_center]], dtype=hidden.dtype)
             next_emb = self.region.encode_coordinate(x_coord).reshape(1, 1, -1)
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
-            pos += 1
+            logits, hidden, cache = self._decode_one(next_emb, cache)
             y_logits = self.region.decode_coordinate(hidden)
             y_center = float(mx.argmax(y_logits, axis=-1) / y_logits.shape[-1])
             y_coord = mx.array([[y_center]], dtype=hidden.dtype)
             next_emb = self.region.encode_coordinate(y_coord).reshape(1, 1, -1)
 
             if include_size:
-                logits, hidden, cache = self._decode_one(next_emb, pos, cache)
-                pos += 1
+                logits, hidden, cache = self._decode_one(next_emb, cache)
                 size_logits = self.region.decode_size(hidden[:, -1, :])
 
                 w_bin = int(mx.argmax(size_logits[0], axis=-1))
@@ -538,8 +477,7 @@ class Moondream(nn.Module):
             else:
                 out.append({"x": x_center, "y": y_center})
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
-            pos += 1
+            logits, hidden, cache = self._decode_one(next_emb, cache)
 
             coord_eos_logits = mx.stack([logits[:, coord_id], logits[:, eos_id]], axis=-1)
             next_idx = int(mx.argmax(coord_eos_logits, axis=-1)[0])
