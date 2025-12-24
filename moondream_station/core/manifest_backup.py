@@ -6,7 +6,6 @@ import subprocess
 import tarfile
 import shutil
 import tempfile
-import platform
 
 from pathlib import Path
 from typing import Dict, List, Optional, Any
@@ -222,7 +221,7 @@ class ManifestManager:
             return False
 
     def _install_requirements(self, requirements_url: str) -> bool:
-        """Check if all requirements are installed, install missing ones with system-aware PyTorch installation"""
+        """Check if all requirements are installed, install missing ones"""
         try:
             # Get requirements content
             if requirements_url.startswith(("http://", "https://")):
@@ -233,29 +232,7 @@ class ManifestManager:
                 with open(requirements_url) as f:
                     requirements_content = f.read()
 
-            # Check if torch is in requirements - use system-aware installation
-            has_torch = False
-            for line in requirements_content.split('\n'):
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                # Extract package name more carefully
-                package_name = line.split('>=')[0].split('==')[0].split('<')[0].split(';')[0].strip()
-                if package_name.lower() == 'torch':
-                    has_torch = True
-                    break
-            
-            if has_torch:
-                # Use system-aware PyTorch installer with improved error handling
-                torch_installer = TorchInstaller()
-                result = torch_installer.install_torch_requirements(requirements_content)
-                if not result.success:
-                    logger.error(f"PyTorch installation failed: {result.message}")
-                    if result.details:
-                        logger.error(f"Details: {result.details}")
-                return result.success
-            
-            # For non-torch requirements, use standard installation
+            # Parse requirements
             missing_requirements = []
             for line in requirements_content.strip().split('\n'):
                 line = line.strip()
@@ -281,22 +258,8 @@ class ManifestManager:
                 with open(requirements_path, "w") as f:
                     f.write('\n'.join(missing_requirements))
 
-                # Build pip command
-                pip_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)]
-
-                # Add PyTorch index URL if needed
-                has_torch = any(
-                    req.lower().startswith(("torch", "torchvision", "torchaudio"))
-                    for req in missing_requirements
-                )
-
-                if has_torch:
-                    torch_index = self.config.get("torch_index_url")
-                    if torch_index and torch_index != "none":
-                        pip_cmd.extend(["--extra-index-url", torch_index])
-
                 result = subprocess.run(
-                    pip_cmd,
+                    [sys.executable, "-m", "pip", "install", "-r", str(requirements_path)],
                     capture_output=True,
                     text=True,
                 )
@@ -384,8 +347,9 @@ class ManifestManager:
         backend_id = model_info.backend
         backend = self.load_backend(backend_id)
 
-        if backend and hasattr(backend, "init_backend"):
-            backend.init_backend(**(model_info.args or {}))
+        # Initialize backend with model args if available
+        if backend and model_info.args and hasattr(backend, "init_backend"):
+            backend.init_backend(**model_info.args)
 
         return backend
 
@@ -410,8 +374,8 @@ class ManifestManager:
             sys.modules[worker_module_name] = module
             spec.loader.exec_module(module)
 
-            if hasattr(module, "init_backend"):
-                module.init_backend(**(model_args or {}))
+            if model_args and hasattr(module, "init_backend"):
+                module.init_backend(**model_args)
 
             return module
         except Exception:
@@ -455,6 +419,7 @@ class ManifestManager:
         if not self._manifest:
             return None
 
+        import platform
         current_os = platform.system().lower()
 
         for model_id, model_info in self._manifest.models.items():
