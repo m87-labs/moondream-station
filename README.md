@@ -64,6 +64,18 @@ To fire up Moondream Station, execute this command in your terminal:
 $ moondream-station
 ```
 
+### Launch Moondream Station using Docker
+
+To fire up Moondream Station via Docker, execute this command in your terminal:
+```
+$ docker build -t moondream-cpu:latest -f Dockerfile.cpu .
+```
+
+Run the above docker image as container in interactive way (For CPU)
+```
+$ docker run -it -p 2020:2020 moondream-cpu:latest
+```
+
 ### Model Management
 By default, Moondream Station uses the latest model your machine supports. If you want to view or activate other Moondream models, use the following commands:
 - `models` - List available models
