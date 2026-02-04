@@ -13,15 +13,18 @@ import json
 import logging
 import re
 import sys
+import os
 from pathlib import Path
 from typing import Any
-
-import mlx.core as mx
-from PIL import Image
 
 _backend_dir = Path(__file__).parent
 if str(_backend_dir) not in sys.path:
     sys.path.insert(0, str(_backend_dir))
+
+import mlx.core as mx
+from PIL import Image
+
+from adapter_provider import MoondreamAdapterProvider
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +33,9 @@ _model_commit_hash = None
 _loaded_model_id = None
 _initialized = False
 _quantize_mode = None
+_adapter_provider = None
+_lora_max_rank = 16
+_lora_cache_size = 32
 
 MODEL_ID = "moondream/moondream3-preview"
 MODEL_ID_INT4 = "moondream/md3p-int4"
@@ -46,8 +52,12 @@ def _snapshot_ok(snapshot_path: Path) -> bool:
 
 
 def init_backend(**kwargs: Any) -> None:
-    global _initialized, _quantize_mode
+    global _initialized, _quantize_mode, _lora_max_rank, _lora_cache_size
     _quantize_mode = kwargs.get("quantize", None)
+    if "lora_max_rank" in kwargs:
+        _lora_max_rank = int(kwargs["lora_max_rank"])
+    if "lora_cache_size" in kwargs:
+        _lora_cache_size = int(kwargs["lora_cache_size"])
     _initialized = True
     if _quantize_mode:
         logger.info(f"MLX backend initialized with quantization mode: {_quantize_mode}")
@@ -62,6 +72,9 @@ def _load_config(weights_path: Path):
     config_path = weights_path / "config.json"
     with open(config_path, "r") as f:
         config_dict = json.load(f)
+    # HF configs may nest actual config under "config"
+    if isinstance(config_dict, dict) and isinstance(config_dict.get("config"), dict):
+        config_dict = config_dict["config"]
     return MoondreamConfig.from_dict(config_dict)
 
 
@@ -90,6 +103,114 @@ def _remap_weight_name(name: str) -> str:
     return name
 
 
+def _torch_to_mx(tensor):
+    import numpy as np
+    import torch
+
+    if not torch.is_tensor(tensor):
+        return mx.array(tensor)
+
+    dtype = tensor.dtype
+    if dtype == torch.bfloat16:
+        arr = tensor.float().cpu().numpy()
+        return mx.array(arr, dtype=mx.bfloat16)
+    if dtype == torch.float16:
+        return mx.array(tensor.cpu().numpy(), dtype=mx.float16)
+    if dtype == torch.float32:
+        return mx.array(tensor.cpu().numpy(), dtype=mx.float32)
+    if dtype == torch.bool:
+        return mx.array(tensor.cpu().numpy().astype(np.bool_))
+    if dtype in (torch.int8, torch.int16, torch.int32, torch.int64):
+        return mx.array(tensor.cpu().numpy())
+    return mx.array(tensor.cpu().numpy())
+
+
+def _dequantize_fp8_moe(weights: dict) -> dict:
+    import torch
+
+    float8_keys = [
+        k for k, v in weights.items() if torch.is_tensor(v) and "float8" in str(v.dtype)
+    ]
+    if not float8_keys:
+        return weights
+
+    out = dict(weights)
+    for key in float8_keys:
+        if key.endswith(".mlp.fc1.weight"):
+            scale_key = key.replace(".mlp.fc1.weight", ".moe_quant.up_scale")
+        elif key.endswith(".mlp.fc2.weight"):
+            scale_key = key.replace(".mlp.fc2.weight", ".moe_quant.down_scale")
+        else:
+            raise RuntimeError(f"Unexpected FP8 weight key: {key}")
+
+        scale = out.get(scale_key)
+        if scale is None:
+            raise RuntimeError(f"Missing FP8 scale tensor for {key} ({scale_key})")
+
+        weight = out[key]
+        if scale.ndim != 2 or weight.ndim != 3:
+            raise RuntimeError(
+                f"Unexpected FP8 shapes for {key}: weight={weight.shape}, scale={scale.shape}"
+            )
+        if weight.shape[0] != scale.shape[0] or weight.shape[1] != scale.shape[1]:
+            raise RuntimeError(
+                f"FP8 scale shape mismatch for {key}: weight={weight.shape}, scale={scale.shape}"
+            )
+
+        deq = weight.float() * scale[..., None]
+        out[key] = deq.to(dtype=torch.bfloat16)
+
+    # Drop scale tensors after dequantization to reduce memory
+    for key in list(out.keys()):
+        if key.endswith(".moe_quant.up_scale") or key.endswith(".moe_quant.down_scale"):
+            out.pop(key, None)
+
+    return out
+
+
+def _load_weights_with_torch(weights_path: Path, shards: list[str]) -> dict:
+    from safetensors.torch import safe_open
+
+    weights = {}
+    for shard in shards:
+        shard_path = weights_path / shard
+        with safe_open(str(shard_path), framework="pt") as f:
+            for key in f.keys():
+                weights[key] = f.get_tensor(key)
+
+    weights = _dequantize_fp8_moe(weights)
+
+    mx_weights = {}
+    for key, tensor in weights.items():
+        if tensor is None:
+            continue
+        mx_weights[key] = _torch_to_mx(tensor)
+    return mx_weights
+
+
+def _load_weights_with_mx(weights_path: Path, shards: list[str]) -> dict:
+    all_weights = {}
+    for shard in shards:
+        shard_path = weights_path / shard
+        weights = mx.load(str(shard_path))
+        all_weights.update(weights)
+    return all_weights
+
+
+def _shard_has_fp8(shard_path: Path) -> bool:
+    try:
+        from safetensors.torch import safe_open
+    except Exception:
+        return False
+
+    with safe_open(str(shard_path), framework="pt") as f:
+        for key in f.keys():
+            dtype = f.get_tensor(key).dtype
+            if "float8" in str(dtype):
+                return True
+    return False
+
+
 def _load_weights(weights_path: Path, remap: bool = True):
     """Load weights from HuggingFace safetensors.
 
@@ -98,15 +219,29 @@ def _load_weights(weights_path: Path, remap: bool = True):
         remap: If True, remap HF names to MLX names. If False, assume already remapped.
     """
     index_path = weights_path / "model.safetensors.index.json"
-    with open(index_path, "r") as f:
-        index = json.load(f)
+    if index_path.exists():
+        with open(index_path, "r") as f:
+            index = json.load(f)
+        shards = sorted(set(index["weight_map"].values()))
+    else:
+        shards = ["model.safetensors"]
 
-    all_weights = {}
-    shards = set(index["weight_map"].values())
+    use_torch = False
     for shard in shards:
-        shard_path = weights_path / shard
-        weights = mx.load(str(shard_path))
-        all_weights.update(weights)
+        if _shard_has_fp8(weights_path / shard):
+            use_torch = True
+            break
+
+    if use_torch:
+        all_weights = _load_weights_with_torch(weights_path, shards)
+    else:
+        try:
+            all_weights = _load_weights_with_mx(weights_path, shards)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load safetensors with MLX. If this is an FP8 checkpoint, "
+                "install safetensors and torch to enable FP8 dequantization."
+            ) from e
 
     if not remap:
         return all_weights
@@ -272,6 +407,51 @@ def _extract_text_settings(kwargs: dict) -> dict | None:
     return settings if settings else None
 
 
+def _extract_adapter(kwargs: dict) -> str | None:
+    """Extract adapter id from kwargs (nested settings or top-level)."""
+    adapter = None
+    if "settings" in kwargs and isinstance(kwargs["settings"], dict):
+        adapter = kwargs["settings"].get("adapter")
+    if adapter is None:
+        adapter = kwargs.get("adapter")
+    if adapter is None:
+        return None
+    if not isinstance(adapter, str):
+        raise TypeError("adapter must be a string or None")
+    adapter = adapter.strip()
+    if not adapter:
+        raise ValueError("adapter must be a non-empty string")
+    return adapter
+
+
+def _get_adapter_provider(model) -> MoondreamAdapterProvider:
+    global _adapter_provider
+    if _adapter_provider is not None:
+        return _adapter_provider
+
+    api_key = os.environ.get("MOONDREAM_API_KEY")
+    if not api_key:
+        raise RuntimeError("MOONDREAM_API_KEY is required to load LoRA adapters")
+
+    # Force LoRA adapters to bf16 to match the base model precision.
+    dtype = mx.bfloat16
+    _adapter_provider = MoondreamAdapterProvider(
+        text_config=model.config.text,
+        api_key=api_key,
+        max_lora_rank=_lora_max_rank,
+        cache_size=_lora_cache_size,
+        dtype=dtype,
+    )
+    return _adapter_provider
+
+
+def _resolve_lora(model, adapter_id: str | None):
+    if adapter_id is None:
+        return None
+    provider = _get_adapter_provider(model)
+    return provider.get(adapter_id)
+
+
 def _extract_object_settings(kwargs: dict) -> dict | None:
     """Extract object sampling settings from kwargs (handles both nested and flat)."""
     settings = {}
@@ -298,7 +478,11 @@ def caption(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
-        result = model.caption(image, length=length, stream=stream, settings=settings)
+        adapter_id = _extract_adapter(kwargs)
+        lora = _resolve_lora(model, adapter_id)
+        result = model.caption(
+            image, length=length, stream=stream, settings=settings, lora=lora
+        )
         mx.clear_cache()  # Release unused metal buffers
         return result
     except Exception as e:
@@ -321,8 +505,10 @@ def query(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_text_settings(kwargs)
+        adapter_id = _extract_adapter(kwargs)
+        lora = _resolve_lora(model, adapter_id)
         result = model.query(
-            image, question, reasoning=reasoning, stream=stream, settings=settings
+            image, question, reasoning=reasoning, stream=stream, settings=settings, lora=lora
         )
         mx.clear_cache()  # Release unused metal buffers
         return result
@@ -346,7 +532,9 @@ def detect(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_object_settings(kwargs)
-        result = model.detect(image, target_obj, settings=settings)
+        adapter_id = _extract_adapter(kwargs)
+        lora = _resolve_lora(model, adapter_id)
+        result = model.detect(image, target_obj, settings=settings, lora=lora)
         mx.clear_cache()  # Release unused metal buffers
         return {"objects": result.get("objects", [])}
     except Exception as e:
@@ -369,7 +557,9 @@ def point(
         model = _get_model()
         image = _load_image(image_url)
         settings = _extract_object_settings(kwargs)
-        result = model.point(image, target_obj, settings=settings)
+        adapter_id = _extract_adapter(kwargs)
+        lora = _resolve_lora(model, adapter_id)
+        result = model.point(image, target_obj, settings=settings, lora=lora)
         mx.clear_cache()  # Release unused metal buffers
         points = result.get("points", [])
         return {"points": points, "count": len(points)}

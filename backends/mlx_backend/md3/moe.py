@@ -38,7 +38,7 @@ class MoEMLP(nn.Module):
         self.fc1 = mx.zeros((n_experts, 2 * expert_dim, dim))
         self.fc2 = mx.zeros((n_experts, dim, expert_dim))
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, lora: Optional[object] = None) -> mx.array:
         B, T, C = x.shape
         x_flat = x.reshape(-1, C)
 
@@ -60,12 +60,23 @@ class MoEMLP(nn.Module):
 
             x_expanded = mx.broadcast_to(x_flat[:, None, :], (num_tokens, top_k, C))
             x_expanded = x_expanded.reshape(-1, C, 1)
-
             x1_full = mx.matmul(w1_selected, x_expanded).squeeze(-1)
+            if lora is not None:
+                lora_up_a = lora.up_a[flat_idxs]
+                lora_up_b = lora.up_b[flat_idxs]
+                lora_mid = mx.matmul(lora_up_a, x_expanded).squeeze(-1)
+                lora_up = mx.matmul(lora_up_b, lora_mid[:, :, None]).squeeze(-1)
+                x1_full = x1_full + lora_up
             h, g = mx.split(x1_full, 2, axis=-1)
             h = nn.gelu(h) * (g + 1)
 
             expert_outs = mx.matmul(w2_selected, h[:, :, None]).squeeze(-1)
+            if lora is not None:
+                lora_down_a = lora.down_a[flat_idxs]
+                lora_down_b = lora.down_b[flat_idxs]
+                lora_mid = mx.matmul(lora_down_a, h[:, :, None]).squeeze(-1)
+                lora_down = mx.matmul(lora_down_b, lora_mid[:, :, None]).squeeze(-1)
+                expert_outs = expert_outs + lora_down
             weighted_outs = expert_outs * flat_weights[:, None]
             weighted_outs = weighted_outs.reshape(num_tokens, top_k, C)
             mlp_out = weighted_outs.sum(axis=1)
@@ -86,6 +97,22 @@ class MoEMLP(nn.Module):
             rhs_indices=idx,
             sorted_indices=do_sort,
         )
+        if lora is not None:
+            lora_up_a = lora.up_a
+            lora_up_b = lora.up_b
+            lora_mid = mx.gather_mm(
+                x_expanded,
+                lora_up_a.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            lora_up = mx.gather_mm(
+                lora_mid,
+                lora_up_b.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            h_full = h_full + lora_up
 
         h, g = mx.split(h_full, 2, axis=-1)
         h = _gated_gelu_compiled(h, g)
@@ -96,6 +123,22 @@ class MoEMLP(nn.Module):
             rhs_indices=idx,
             sorted_indices=do_sort,
         )
+        if lora is not None:
+            lora_down_a = lora.down_a
+            lora_down_b = lora.down_b
+            lora_mid = mx.gather_mm(
+                h,
+                lora_down_a.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            lora_down = mx.gather_mm(
+                lora_mid,
+                lora_down_b.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            expert_outs = expert_outs + lora_down
 
         if do_sort:
             expert_outs = _scatter_unsort(expert_outs, inv_order, topk_idxs.shape)
@@ -200,7 +243,7 @@ class QuantizedMoEMLP(nn.Module):
 
         return q
 
-    def __call__(self, x: mx.array) -> mx.array:
+    def __call__(self, x: mx.array, lora: Optional[object] = None) -> mx.array:
         B, T, C = x.shape
         x_flat = x.reshape(-1, C)
 
@@ -230,6 +273,22 @@ class QuantizedMoEMLP(nn.Module):
             mode=self.mode,
             sorted_indices=do_sort,
         )
+        if lora is not None:
+            lora_up_a = lora.up_a
+            lora_up_b = lora.up_b
+            lora_mid = mx.gather_mm(
+                x_expanded,
+                lora_up_a.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            lora_up = mx.gather_mm(
+                lora_mid,
+                lora_up_b.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            h_full = h_full + lora_up
 
         h, g = mx.split(h_full, 2, axis=-1)
         h = _gated_gelu_compiled(h, g)
@@ -246,6 +305,22 @@ class QuantizedMoEMLP(nn.Module):
             mode=self.mode,
             sorted_indices=do_sort,
         )
+        if lora is not None:
+            lora_down_a = lora.down_a
+            lora_down_b = lora.down_b
+            lora_mid = mx.gather_mm(
+                h,
+                lora_down_a.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            lora_down = mx.gather_mm(
+                lora_mid,
+                lora_down_b.swapaxes(-1, -2),
+                rhs_indices=idx,
+                sorted_indices=do_sort,
+            )
+            expert_outs = expert_outs + lora_down
 
         if do_sort:
             expert_outs = _scatter_unsort(expert_outs, inv_order, topk_idxs.shape)

@@ -26,11 +26,14 @@ class RegionModel(nn.Module):
         self.size_encoder = nn.Linear(config.size_feat_dim, config.dim)
         self.size_decoder = nn.Linear(config.dim, config.size_out_dim)
 
+        self.ln = nn.LayerNorm(config.dim)
+
     def encode_coordinate(self, coord: mx.array) -> mx.array:
         features = fourier_features(coord, self.coord_features)
         return self.coord_encoder(features)
 
     def decode_coordinate(self, hidden_state: mx.array) -> mx.array:
+        hidden_state = self.ln(hidden_state)
         return self.coord_decoder(hidden_state)
 
     def encode_size(self, size: mx.array) -> mx.array:
@@ -38,6 +41,7 @@ class RegionModel(nn.Module):
         return self.size_encoder(features)
 
     def decode_size(self, hidden_state: mx.array) -> mx.array:
+        hidden_state = self.ln(hidden_state)
         logits = self.size_decoder(hidden_state)
         return logits.reshape(2, -1)
 

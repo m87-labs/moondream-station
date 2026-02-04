@@ -3,7 +3,7 @@ from functools import partial
 
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Dict, List, Literal, Optional, Tuple, TypedDict
+from typing import Dict, List, Literal, Optional, Tuple, TypedDict, TYPE_CHECKING
 from PIL import Image
 from tokenizers import Tokenizer
 
@@ -12,6 +12,9 @@ from .vision import VisionEncoder
 from .text import TextModel
 from .region import RegionModel, SpatialRefs, bin_to_size
 from .image_crops import prepare_crops
+
+if TYPE_CHECKING:
+    from .lora import TextLoRA
 
 
 DEFAULT_MAX_TOKENS = 768
@@ -120,6 +123,39 @@ class Moondream(nn.Module):
 
         return _get_compiled(self, "decode_step", decode_step)
 
+    def _get_decode_step_lora_compiled(self, lora: "TextLoRA"):
+        model_id = id(self)
+        adapter_id = getattr(lora, "adapter_id", None)
+        key = f"decode_step_lora:{adapter_id}:{id(lora)}"
+        if model_id in _compiled_cache and key in _compiled_cache[model_id]:
+            return _compiled_cache[model_id][key]
+
+        text = self.text
+
+        def decode_step_lora(embedding, positions, mask, cache, cache_pos, kv_quant):
+            x = embedding
+            new_caches = []
+            for i, block in enumerate(text.blocks):
+                block_cache = cache[i] if cache is not None else None
+                if getattr(block, "is_moe", False):
+                    layer_lora = lora.moe_layer(i)
+                else:
+                    layer_lora = lora.dense_layer(i)
+                x, new_cache = block(
+                    x,
+                    text.freqs_cis,
+                    positions,
+                    mask,
+                    block_cache,
+                    cache_pos,
+                    kv_quant,
+                    lora=layer_lora,
+                )
+                new_caches.append(new_cache)
+            return x, new_caches
+
+        return _get_compiled(self, key, decode_step_lora)
+
     def quantize_experts(self) -> None:
         from .moe import QuantizedMoEMLP
 
@@ -131,7 +167,7 @@ class Moondream(nn.Module):
 
         self._kv_quant = True
 
-        _clear_compiled(self, "decode_step")
+        _clear_compiled(self)
 
     def _allocate_kv_cache(self, batch_size: int = 1) -> List:
         n_layers = len(self.text.blocks)
@@ -181,12 +217,15 @@ class Moondream(nn.Module):
         embeddings: mx.array,
         cache_pos: int,
         cache: List,
+        lora: Optional["TextLoRA"] = None,
     ) -> Tuple[mx.array, List]:
         seq_len = embeddings.shape[1]
         positions = mx.arange(cache_pos, cache_pos + seq_len)
         mask = self.attn_mask[:, :, cache_pos:cache_pos + seq_len, :]
         kv_quant = self._kv_quant and not DISABLE_KV_QUANT
-        hidden, new_cache = self.text(embeddings, positions, mask, cache, cache_pos, kv_quant)
+        hidden, new_cache = self.text(
+            embeddings, positions, mask, cache, cache_pos, kv_quant, lora=lora
+        )
         return hidden, new_cache
 
     def _decode_one(
@@ -194,13 +233,16 @@ class Moondream(nn.Module):
         embedding: mx.array,
         cache_pos: int,
         cache: List,
+        lora: Optional["TextLoRA"] = None,
     ) -> Tuple[mx.array, mx.array, List]:
         positions = mx.array([cache_pos])
         mask = None
         kv_quant = self._kv_quant and not DISABLE_KV_QUANT
-        hidden, new_cache = self._get_decode_step_compiled()(
-            embedding, positions, mask, cache, cache_pos, kv_quant
-        )
+        if lora is None:
+            decode_fn = self._get_decode_step_compiled()
+        else:
+            decode_fn = self._get_decode_step_lora_compiled(lora)
+        hidden, new_cache = decode_fn(embedding, positions, mask, cache, cache_pos, kv_quant)
         logits = self.text.generate_logits(hidden)
         return logits, hidden, new_cache
 
@@ -211,6 +253,7 @@ class Moondream(nn.Module):
         reasoning: bool = True,
         stream: bool = False,
         settings: Optional[TextSamplingSettings] = None,
+        lora: Optional["TextLoRA"] = None,
     ) -> Dict:
         max_tokens = settings.get("max_tokens", DEFAULT_MAX_TOKENS) if settings else DEFAULT_MAX_TOKENS
         temperature = settings.get("temperature", DEFAULT_TEMPERATURE) if settings else DEFAULT_TEMPERATURE
@@ -224,7 +267,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
+        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache, lora=lora)
         pos = inputs_embeds.shape[1]
 
         prompt_toks = self.config.tokenizer.templates["query"]["prefix"]
@@ -237,16 +280,18 @@ class Moondream(nn.Module):
             prompt_tokens = mx.array([prompt_toks])
             prompt_emb = self.text.embed(prompt_tokens)
 
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
+            hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
             pos += prompt_emb.shape[1]
 
-            reasoning_text, pos, cache = self._generate_reasoning(hidden, pos, cache, settings)
+            reasoning_text, pos, cache = self._generate_reasoning(
+                hidden, pos, cache, settings, lora=lora
+            )
             result["reasoning"] = {"text": reasoning_text, "grounding": []}
 
             suffix_toks = self.config.tokenizer.templates["query"]["suffix"]
             prompt_tokens = mx.array([suffix_toks])
             prompt_emb = self.text.embed(prompt_tokens)
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
+            hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
             logits = self.text.generate_logits(hidden)
             next_token = self._sample_token(logits, temperature, top_p)
             pos += prompt_emb.shape[1]
@@ -254,7 +299,7 @@ class Moondream(nn.Module):
             prompt_toks = prompt_toks + self.config.tokenizer.templates["query"]["suffix"]
             prompt_tokens = mx.array([prompt_toks])
             prompt_emb = self.text.embed(prompt_tokens)
-            hidden, cache = self._prefill(prompt_emb, pos, cache)
+            hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
             logits = self.text.generate_logits(hidden)
             next_token = self._sample_token(logits, temperature, top_p)
             pos += prompt_emb.shape[1]
@@ -270,7 +315,7 @@ class Moondream(nn.Module):
                 tokens.append(token_id)
 
                 next_emb = self.text.embed(next_token)
-                logits, _, cache = self._decode_one(next_emb, pos, cache)
+                logits, _, cache = self._decode_one(next_emb, pos, cache, lora=lora)
                 next_token = self._sample_token(logits, temperature, top_p)
                 mx.async_eval(next_token)
                 pos += 1
@@ -297,6 +342,7 @@ class Moondream(nn.Module):
         pos: int,
         cache: List,
         settings: Optional[TextSamplingSettings] = None,
+        lora: Optional["TextLoRA"] = None,
     ) -> Tuple[str, int, List]:
         max_tokens = settings.get("max_tokens", DEFAULT_MAX_TOKENS) if settings else DEFAULT_MAX_TOKENS
         temperature = settings.get("temperature", DEFAULT_TEMPERATURE) if settings else DEFAULT_TEMPERATURE
@@ -320,7 +366,7 @@ class Moondream(nn.Module):
             else:
                 next_emb = self.text.embed(next_token)
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
+            logits, hidden, cache = self._decode_one(next_emb, pos, cache, lora=lora)
             next_token = self._sample_token(logits, temperature, top_p)
             mx.async_eval(next_token)
             pos += 1
@@ -334,6 +380,7 @@ class Moondream(nn.Module):
         length: Literal["normal", "short", "long"] = "normal",
         stream: bool = False,
         settings: Optional[TextSamplingSettings] = None,
+        lora: Optional["TextLoRA"] = None,
     ) -> Dict:
         max_tokens = settings.get("max_tokens", DEFAULT_MAX_TOKENS) if settings else DEFAULT_MAX_TOKENS
         temperature = settings.get("temperature", DEFAULT_TEMPERATURE) if settings else DEFAULT_TEMPERATURE
@@ -349,13 +396,13 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
+        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache, lora=lora)
         pos = inputs_embeds.shape[1]
 
         prompt_toks = self.config.tokenizer.templates["caption"][length]
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, temperature, top_p)
         pos += prompt_emb.shape[1]
@@ -371,7 +418,7 @@ class Moondream(nn.Module):
                 tokens.append(token_id)
 
                 next_emb = self.text.embed(next_token)
-                logits, _, cache = self._decode_one(next_emb, pos, cache)
+                logits, _, cache = self._decode_one(next_emb, pos, cache, lora=lora)
                 next_token = self._sample_token(logits, temperature, top_p)
                 mx.async_eval(next_token)
                 pos += 1
@@ -395,6 +442,7 @@ class Moondream(nn.Module):
         image: Image.Image,
         object: str,
         settings: Optional[ObjectSamplingSettings] = None,
+        lora: Optional["TextLoRA"] = None,
     ) -> Dict:
         max_objects = settings.get("max_objects", DEFAULT_MAX_OBJECTS) if settings else DEFAULT_MAX_OBJECTS
 
@@ -406,7 +454,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
+        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache, lora=lora)
         pos = inputs_embeds.shape[1]
 
         prompt_toks = (
@@ -416,13 +464,13 @@ class Moondream(nn.Module):
         )
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, 0, 0)
         pos += prompt_emb.shape[1]
 
         objects = self._generate_points(
-            hidden[:, -1:, :], next_token, pos, cache, include_size=True, max_objects=max_objects
+            hidden[:, -1:, :], next_token, pos, cache, include_size=True, max_objects=max_objects, lora=lora
         )
 
         return {"objects": objects}
@@ -432,6 +480,7 @@ class Moondream(nn.Module):
         image: Image.Image,
         object: str,
         settings: Optional[ObjectSamplingSettings] = None,
+        lora: Optional["TextLoRA"] = None,
     ) -> Dict:
         max_objects = settings.get("max_objects", DEFAULT_MAX_OBJECTS) if settings else DEFAULT_MAX_OBJECTS
 
@@ -443,7 +492,7 @@ class Moondream(nn.Module):
         inputs_embeds = mx.concatenate([bos_emb, img_emb[None]], axis=1)
 
         cache = self._allocate_kv_cache()
-        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache)
+        _, cache = self._prefill(inputs_embeds, cache_pos=0, cache=cache, lora=lora)
         pos = inputs_embeds.shape[1]
 
         prompt_toks = (
@@ -453,13 +502,13 @@ class Moondream(nn.Module):
         )
         prompt_tokens = mx.array([prompt_toks])
         prompt_emb = self.text.embed(prompt_tokens)
-        hidden, cache = self._prefill(prompt_emb, pos, cache)
+        hidden, cache = self._prefill(prompt_emb, pos, cache, lora=lora)
         logits = self.text.generate_logits(hidden)
         next_token = self._sample_token(logits, 0, 0)
         pos += prompt_emb.shape[1]
 
         points = self._generate_points(
-            hidden[:, -1:, :], next_token, pos, cache, include_size=False, max_objects=max_objects
+            hidden[:, -1:, :], next_token, pos, cache, include_size=False, max_objects=max_objects, lora=lora
         )
 
         return {"points": points}
@@ -472,6 +521,7 @@ class Moondream(nn.Module):
         cache: List,
         include_size: bool,
         max_objects: int,
+        lora: Optional["TextLoRA"] = None,
     ) -> List[Dict]:
         out = []
         eos_id = self.config.tokenizer.eos_id
@@ -483,7 +533,7 @@ class Moondream(nn.Module):
             x_coord = mx.array([[x_center]], dtype=hidden.dtype)
             next_emb = self.region.encode_coordinate(x_coord).reshape(1, 1, -1)
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
+            logits, hidden, cache = self._decode_one(next_emb, pos, cache, lora=lora)
             pos += 1
             y_logits = self.region.decode_coordinate(hidden)
             y_center = float(mx.argmax(y_logits, axis=-1) / y_logits.shape[-1])
@@ -491,7 +541,7 @@ class Moondream(nn.Module):
             next_emb = self.region.encode_coordinate(y_coord).reshape(1, 1, -1)
 
             if include_size:
-                logits, hidden, cache = self._decode_one(next_emb, pos, cache)
+                logits, hidden, cache = self._decode_one(next_emb, pos, cache, lora=lora)
                 pos += 1
                 size_logits = self.region.decode_size(hidden[:, -1, :])
 
@@ -512,7 +562,7 @@ class Moondream(nn.Module):
             else:
                 out.append({"x": x_center, "y": y_center})
 
-            logits, hidden, cache = self._decode_one(next_emb, pos, cache)
+            logits, hidden, cache = self._decode_one(next_emb, pos, cache, lora=lora)
             pos += 1
 
             coord_eos_logits = mx.stack([logits[:, coord_id], logits[:, eos_id]], axis=-1)

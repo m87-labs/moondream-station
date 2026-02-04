@@ -1,10 +1,21 @@
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Any
 
 from .config import TextConfig
 from .attention import TextAttention, precompute_freqs_cis
 from .moe import MoEMLP
+
+
+def _apply_dense_lora(x: mx.array, lora_a: mx.array, lora_b: mx.array) -> mx.array:
+    """Apply dense LoRA: x @ A.T @ B.T."""
+    b, t, c = x.shape
+    x_flat = x.reshape(-1, c)
+    # [BT, rank]
+    lora_mid = mx.matmul(x_flat, lora_a.T)
+    # [BT, out_dim]
+    lora_out = mx.matmul(lora_mid, lora_b.T)
+    return lora_out.reshape(b, t, -1)
 
 
 class DenseMLP(nn.Module):
@@ -13,8 +24,15 @@ class DenseMLP(nn.Module):
         self.fc1 = nn.Linear(dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, dim)
 
-    def __call__(self, x: mx.array) -> mx.array:
-        return self.fc2(nn.gelu_approx(self.fc1(x)))
+    def __call__(self, x: mx.array, lora: Any = None) -> mx.array:
+        h = self.fc1(x)
+        if lora is not None:
+            h = h + _apply_dense_lora(x, lora.up_a, lora.up_b)
+        h = nn.gelu_approx(h)
+        out = self.fc2(h)
+        if lora is not None:
+            out = out + _apply_dense_lora(h, lora.down_a, lora.down_b)
+        return out
 
 
 class TextBlock(nn.Module):
@@ -45,10 +63,11 @@ class TextBlock(nn.Module):
         cache: Optional[Tuple] = None,
         cache_pos: int = 0,
         kv_quant: bool = False,
+        lora: Any = None,
     ) -> Tuple[mx.array, Tuple]:
         h = self.ln(x)
         attn_out, new_cache = self.attn(h, freqs_cis, positions, mask, cache, cache_pos, kv_quant)
-        mlp_out = self.mlp(h)
+        mlp_out = self.mlp(h, lora=lora) if lora is not None else self.mlp(h)
         out = x + attn_out + mlp_out
         return out, new_cache
 
@@ -75,13 +94,29 @@ class TextModel(nn.Module):
         cache: Optional[List[Tuple]] = None,
         cache_pos: int = 0,
         kv_quant: bool = False,
+        lora: Any = None,
     ) -> Tuple[mx.array, List[Tuple]]:
         new_caches = []
         is_prefill = positions.shape[0] > 1
 
         for i, block in enumerate(self.blocks):
             block_cache = cache[i] if cache is not None else None
-            x, new_cache = block(x, self.freqs_cis, positions, mask, block_cache, cache_pos, kv_quant)
+            layer_lora = None
+            if lora is not None:
+                if getattr(block, "is_moe", False):
+                    layer_lora = lora.moe_layer(i)
+                else:
+                    layer_lora = lora.dense_layer(i)
+            x, new_cache = block(
+                x,
+                self.freqs_cis,
+                positions,
+                mask,
+                block_cache,
+                cache_pos,
+                kv_quant,
+                lora=layer_lora,
+            )
             new_caches.append(new_cache)
 
             if is_prefill and (i + 1) % 4 == 0:
