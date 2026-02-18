@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+LABEL maintainer="Moondream"
+WORKDIR /app
+
+# Install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Install moondream-station
+COPY . .
+RUN pip install --no-cache-dir -e .
+
+# Pre-configure for CPU (non-interactive)
+RUN mkdir -p /root/.moondream-station && \
+    echo '{"torch_cuda_version": "none", "torch_index_url": "https://download.pytorch.org/whl/cpu"}' \
+    > /root/.moondream-station/config.json
+
+EXPOSE 2020
+
+# Start the API server
+CMD ["moondream-station"]
